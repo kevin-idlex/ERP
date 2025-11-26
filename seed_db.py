@@ -496,12 +496,13 @@ def run_seed():
         for m in range(24):
             month = date(2026, 1, 1) + timedelta(days=30*m)
             month = month.replace(day=1)
+            month_str = month.isoformat()  # Convert to 'YYYY-MM-DD' string
             growth = 1 + m * 0.04
             for rid, hc in base_hc.items():
                 actual = hc * growth if rid in [7, 8, 9] else hc
                 if actual > 0:
                     conn.execute(text("INSERT INTO opex_staffing_plan (role_id, month_date, headcount) VALUES (:r, :m, :h)"),
-                                {"r": rid, "m": month, "h": round(actual, 1)})
+                                {"r": rid, "m": month_str, "h": round(actual, 1)})
         
         # Production units
         for i in range(200):
@@ -510,7 +511,7 @@ def run_seed():
                 bd += timedelta(days=1)
             ch = 'DIRECT' if i % 4 == 0 else 'DEALER'
             conn.execute(text("INSERT INTO production_unit (serial_number, build_date, sales_channel, status, warranty_policy_id) VALUES (:sn, :bd, :ch, 'PLANNED', 1)"),
-                        {"sn": f"IDX-{i+1:04d}", "bd": bd, "ch": ch})
+                        {"sn": f"IDX-{i+1:04d}", "bd": bd.isoformat(), "ch": ch})
         
         # Work Centers
         wcs = [
@@ -585,21 +586,22 @@ def run_seed():
         # Initial inventory
         for pid in range(1, 9):
             conn.execute(text("INSERT INTO inventory_balance (part_id, as_of_date, quantity_on_hand, quantity_reserved) VALUES (:p, :d, :q, 0)"),
-                        {"p": pid, "d": date(2026, 1, 1), "q": 150})
+                        {"p": pid, "d": date(2026, 1, 1).isoformat(), "q": 150})
         
         # Sample fleet assignments (first 50 units)
         for i in range(1, 51):
             fid = (i % 5) + 1
+            in_service = (date(2026, 1, 1) + timedelta(days=i*2)).isoformat()
             conn.execute(text("""
                 INSERT INTO unit_fleet_assignment (production_unit_id, fleet_id, in_service_date, purchase_price)
                 VALUES (:u, :f, :d, :p)
-            """), {"u": i, "f": fid, "d": date(2026, 1, 1) + timedelta(days=i*2), "p": 8500 if i % 4 == 0 else 6375})
+            """), {"u": i, "f": fid, "d": in_service, "p": 8500 if i % 4 == 0 else 6375})
         
         # Sample warranty events
         events = [
-            (5, date(2026, 3, 15), "Inverter fault", 2, 420, True, False),
-            (12, date(2026, 4, 1), "Display malfunction", 7, 165, True, True),
-            (23, date(2026, 4, 20), "Wiring harness short", 5, 145, True, False),
+            (5, "2026-03-15", "Inverter fault", 2, 420, True, False),
+            (12, "2026-04-01", "Display malfunction", 7, 165, True, True),
+            (23, "2026-04-20", "Wiring harness short", 5, 145, True, False),
         ]
         for e in events:
             conn.execute(text("""
@@ -613,7 +615,7 @@ def run_seed():
             conn.execute(text("""
                 INSERT INTO unit_service_subscription (production_unit_id, service_plan_id, fleet_id, start_date, status)
                 VALUES (:u, :p, :f, :d, 'ACTIVE')
-            """), {"u": i, "p": plan, "f": (i % 5) + 1, "d": date(2026, 2, 1)})
+            """), {"u": i, "p": plan, "f": (i % 5) + 1, "d": "2026-02-01"})
         
         conn.commit()
         logger.info("Database seeded with v5.0 Enterprise schema")

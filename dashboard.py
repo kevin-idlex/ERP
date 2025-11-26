@@ -552,13 +552,17 @@ def save_scenario(name, desc, results, inputs):
     """Save scenario to library."""
     with engine.connect() as conn:
         try:
+            start_dt = inputs['start_date']
+            if hasattr(start_dt, 'isoformat'):
+                start_dt = start_dt.isoformat()
+            
             conn.execute(text("""
                 INSERT INTO scenario_header (name, description, base_start_cash, base_loc_limit,
                     start_units, growth_rate, start_date, forecast_months, total_revenue, total_units, min_cash)
                 VALUES (:n, :d, :c, :l, :u, :r, :s, :m, :rev, :tu, :mc)
             """), {
                 "n": name, "d": desc, "c": inputs['start_cash'], "l": inputs['loc_limit'],
-                "u": inputs['start_units'], "r": results['rate'], "s": inputs['start_date'],
+                "u": inputs['start_units'], "r": results['rate'], "s": start_dt,
                 "m": inputs['months'], "rev": results['total_revenue'], "tu": results['total_units'],
                 "mc": results['min_cash']
             })
@@ -580,10 +584,15 @@ def save_scenario(name, desc, results, inputs):
             # Save cash
             if not results['cash_df'].empty:
                 for _, row in results['cash_df'].iterrows():
+                    dt = row['Date']
+                    if hasattr(dt, 'date'):
+                        dt = dt.date()
+                    if hasattr(dt, 'isoformat'):
+                        dt = dt.isoformat()
                     conn.execute(text("""
                         INSERT INTO scenario_cash_timeseries (scenario_id, date, cash_balance)
                         VALUES (:s, :d, :b)
-                    """), {"s": sid, "d": row['Date'].date() if hasattr(row['Date'], 'date') else row['Date'], "b": row['Cash_Balance']})
+                    """), {"s": sid, "d": dt, "b": row['Cash_Balance']})
             
             conn.commit()
             audit_log("SCENARIO_SAVED", "scenario_header", sid, None, {"name": name})
@@ -608,6 +617,7 @@ def push_to_production(units_df):
             for _, row in units_df.iterrows():
                 bd = row['build_date']
                 if isinstance(bd, pd.Timestamp): bd = bd.date()
+                if hasattr(bd, 'isoformat'): bd = bd.isoformat()
                 conn.execute(text("""
                     INSERT INTO production_unit (serial_number, build_date, sales_channel, status)
                     VALUES (:s, :d, :c, 'PLANNED')
