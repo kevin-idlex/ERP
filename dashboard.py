@@ -1,19 +1,3 @@
-"""
-IdleX CFO Console - Enterprise Edition
-Version: 5.0
-Complete Feature Set:
-  1. Scenario Library & Versioning
-  2. Inventory & Purchase Planner
-  3. Capacity & Throughput Planner
-  4. Covenant & Runway Monitor
-  5. Fleet ROI & Unit Economics
-  6. Warranty & RMA Tracking
-  7. Service & Recurring Revenue
-  8. Board Pack Generator
-  9. Audit Log
-  10. External Integration Hooks
-"""
-
 import streamlit as st
 import pandas as pd
 import numpy as np
