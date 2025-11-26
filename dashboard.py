@@ -1,6 +1,22 @@
+This is a **Data Type Error**.
+
+In the Cash Flow section, we added a row `cf.loc['Operating Activities'] = ""` to create a visual "Header."
+When Python tries to run `cf.sum()` to calculate the total, it crashes because it cannot add **numbers** to that **text string**.
+
+### The Fix
+
+We will change the "Header" row to use `None` (empty) instead of `""` (text). Since your `render_financial_statement` function already knows how to hide values for header rows, this is safe and allows the math to work.
+
+I have also updated the **Net Cash Flow** calculation to explicitly sum the specific numeric rows, which is much safer than a blind `.sum()`.
+
+### The Final Corrected `dashboard.py`
+
+**Select All** \> **Delete** \> **Paste**.
+
+```python
 """
 IdleX CFO Console - Dashboard Application
-Version: 2.3 (Cash Flow Fix & OpEx Upgrade)
+Version: 2.4 (Stable Financials)
 """
 
 import streamlit as st
@@ -13,11 +29,16 @@ import calendar
 import math
 import os
 import seed_db
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # 1. PAGE SETUP
 st.set_page_config(page_title="IdleX CFO Console", layout="wide")
 
-# Custom CSS for "Banker Style" Financials
+# Custom CSS
 st.markdown("""
 <style>
     .financial-table {
@@ -89,11 +110,10 @@ def get_upsert_sql(db_type):
             ON CONFLICT (role_id, month_date) 
             DO UPDATE SET headcount = EXCLUDED.headcount
         """
-    else:
-        return """
-            INSERT OR REPLACE INTO opex_staffing_plan (id, role_id, month_date, headcount) 
-            VALUES ((SELECT id FROM opex_staffing_plan WHERE role_id=:rid AND month_date=:dt), :rid, :dt, :hc)
-        """
+    return """
+        INSERT OR REPLACE INTO opex_staffing_plan (id, role_id, month_date, headcount) 
+        VALUES ((SELECT id FROM opex_staffing_plan WHERE role_id=:rid AND month_date=:dt), :rid, :dt, :hc)
+    """
 
 # --- HELPER FUNCTIONS ---
 def get_workdays(year, month, start_threshold=None):
@@ -105,7 +125,6 @@ def get_workdays(year, month, start_threshold=None):
     return valid_days
 
 def format_banker(val):
-    # FIX: Handle non-numeric values gracefully
     if pd.isna(val) or val == "": return ""
     if isinstance(val, str): return val
     if val < 0: return f"({abs(val):,.0f})"
@@ -116,14 +135,30 @@ def render_financial_statement(df, title):
     html += "<thead><tr><th class='row-header'>Account</th>"
     for col in df.columns: html += f"<th>{col}</th>"
     html += "</tr></thead><tbody>"
+    
+    # Section headers that should render as blank rows
+    header_rows = ['Revenue', 'Cost of Goods Sold', 'Operating Expenses', 'Operating Activities']
+    
     for index, row in df.iterrows():
         clean_index = str(index).strip()
-        row_class = "section-header" if clean_index in ['Revenue', 'Cost of Goods Sold', 'Operating Expenses', 'Operating Activities'] else \
-                    "total-row" if clean_index in ['Gross Profit', 'Net Cash Flow', 'Total OpEx'] else \
-                    "grand-total" if clean_index in ['Net Income', 'Ending Cash Balance'] else "indent"
+        row_class = "indent"
+        is_header = False
+        
+        if clean_index in header_rows:
+            row_class = "section-header"
+            is_header = True
+        elif clean_index in ['Gross Profit', 'Net Cash Flow', 'Total OpEx']:
+            row_class = "total-row"
+        elif clean_index in ['Net Income', 'Ending Cash Balance']:
+            row_class = "grand-total"
+            
         html += f"<tr class='{row_class}'><td class='row-header'>{clean_index}</td>"
-        for col in df.columns: 
-            html += f"<td style='text-align: right;'>{format_banker(row[col])}</td>"
+        
+        if is_header:
+            for _ in df.columns: html += "<td></td>"
+        else:
+            for col in df.columns: 
+                html += f"<td style='text-align: right;'>{format_banker(row[col])}</td>"
         html += "</tr>"
     html += "</tbody></table></div>"
     st.markdown(html, unsafe_allow_html=True)
@@ -145,7 +180,7 @@ def generate_financials():
         df_roles = pd.read_sql("SELECT * FROM opex_roles", engine)
         df_gen_exp = pd.read_sql("SELECT * FROM opex_general_expenses", engine)
         config = pd.read_sql("SELECT * FROM global_config", engine)
-    except Exception:
+    except Exception as e:
         return pd.DataFrame(), pd.DataFrame()
 
     if df_units.empty: return pd.DataFrame(), pd.DataFrame()
@@ -312,6 +347,7 @@ elif view == "Financial Statements":
         with col1: freq = st.radio("Period Aggregation:", ["Monthly", "Quarterly", "Yearly"], horizontal=True, index=1)
         freq_map = {"Monthly": "ME", "Quarterly": "QE", "Yearly": "YE"}
         
+        # P&L
         st.header("Consolidated Statement of Operations")
         pnl_agg = pnl_view.groupby([pd.Grouper(key='Date', freq=freq_map[freq]), 'Type', 'Category']).sum()['Amount'].unstack(level=[1,2]).fillna(0)
         
@@ -326,13 +362,13 @@ elif view == "Financial Statements":
                 if k in pnl_agg.columns: total += pnl_agg[k]
             return total
 
-        stmt.loc['Revenue'] = ""
+        stmt.loc['Revenue'] = None
         stmt.loc['Sales of Goods'] = safe_sum([('Revenue', 'Sales of Goods')])
-        stmt.loc['Cost of Goods Sold'] = ""
+        stmt.loc['Cost of Goods Sold'] = None
         stmt.loc['Raw Materials'] = safe_sum([('COGS', 'Raw Materials')])
         stmt.loc['Direct Labor'] = safe_sum([('COGS', 'Direct Labor')])
         stmt.loc['Gross Profit'] = stmt.loc['Sales of Goods'] + stmt.loc['Raw Materials'] + stmt.loc['Direct Labor']
-        stmt.loc['Operating Expenses'] = ""
+        stmt.loc['Operating Expenses'] = None
         stmt.loc['Salaries & Wages'] = safe_sum([('OpEx', 'Salaries & Wages')])
         opex_cols = [c for c in pnl_agg.columns if c[0] == 'OpEx' and c[1] != 'Salaries & Wages']
         for col in opex_cols: stmt.loc[col[1]] = safe_sum([col])
@@ -342,6 +378,7 @@ elif view == "Financial Statements":
         render_financial_statement(stmt, "")
         st.markdown("---")
         
+        # Cash Flow
         st.header("Statement of Cash Flows")
         cash_view_indexed = cash_view.set_index('Date')
         cash_agg = cash_view.groupby([pd.Grouper(key='Date', freq=freq_map[freq]), 'Category']).sum()['Amount'].unstack().fillna(0)
@@ -350,15 +387,24 @@ elif view == "Financial Statements":
         else: cash_agg.index = cash_agg.index.strftime('%Y')
         
         cf = pd.DataFrame(columns=cash_agg.index)
-        cf.loc['Operating Activities'] = ""
+        cf.loc['Operating Activities'] = None
         cf.loc['Cash from Customers'] = cash_agg.get('Cash from Customers', 0)
         cf.loc['Supplier Payments'] = cash_agg.get('Supplier Deposits', 0) + cash_agg.get('Supplier Settlements', 0)
         cf.loc['Payroll Paid'] = cash_agg.get('Payroll Paid', 0)
         cf.loc['OpEx Paid'] = cash_agg.get('OpEx Paid', 0)
-        cf.loc['Net Cash Flow'] = cf.sum()
+        
+        # FIX: Net Cash Flow is purely numeric sum
+        cf.loc['Net Cash Flow'] = (
+            cf.loc['Cash from Customers'] + 
+            cf.loc['Supplier Payments'] + 
+            cf.loc['Payroll Paid'] + 
+            cf.loc['OpEx Paid']
+        )
+        
         end_bals = cash_view_indexed.resample(freq_map[freq])['Cash_Balance'].last()
-        end_bals.index = cf.columns
-        cf.loc['Ending Cash Balance'] = end_bals
+        if len(end_bals) == len(cf.columns):
+            end_bals.index = cf.columns
+            cf.loc['Ending Cash Balance'] = end_bals
         
         render_financial_statement(cf, "")
 
@@ -457,3 +503,4 @@ if __name__ == "__main__":
         main()
     except Exception as e:
         st.error(f"System Error: {e}")
+```
