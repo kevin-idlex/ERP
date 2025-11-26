@@ -1,6 +1,6 @@
 """
 IdleX CFO Console - Dashboard Application
-Version: 3.2 (Audited & Corrected)
+Version: 3.3 (Bug Fixes: Constraints Save + Role Visibility)
 Includes: Scenario & Optimization Engine, Smart Production Scheduler, GAAP Financials
 """
 
@@ -136,6 +136,21 @@ def get_upsert_sql() -> str:
             (SELECT id FROM opex_staffing_plan WHERE role_id=:rid AND month_date=:dt), 
             :rid, :dt, :hc
         )
+    """
+
+
+def get_config_upsert_sql() -> str:
+    """Generate database-specific upsert SQL for global_config."""
+    if DB_TYPE == "postgresql":
+        return """
+            INSERT INTO global_config (setting_key, setting_value) 
+            VALUES (:key, :val)
+            ON CONFLICT (setting_key) 
+            DO UPDATE SET setting_value = EXCLUDED.setting_value
+        """
+    return """
+        INSERT OR REPLACE INTO global_config (setting_key, setting_value) 
+        VALUES (:key, :val)
     """
 
 
@@ -643,6 +658,51 @@ def render_expense_tab(expense_type: str) -> None:
 
 
 # =============================================================================
+# HEADCOUNT GRID BUILDER
+# =============================================================================
+def build_headcount_grid(df_roles: pd.DataFrame, df_staffing: pd.DataFrame) -> pd.DataFrame:
+    """
+    Build a complete headcount grid showing ALL roles, even those without staffing entries.
+    
+    Args:
+        df_roles: DataFrame of all roles
+        df_staffing: DataFrame of staffing plan entries
+        
+    Returns:
+        Pivoted DataFrame with all roles as rows and months as columns
+    """
+    if df_roles.empty:
+        return pd.DataFrame(columns=['role_name'])
+    
+    # Define the month range for the grid
+    months = pd.date_range('2026-01-01', '2027-12-01', freq='MS')
+    month_strings = [m.strftime('%Y-%m') for m in months]
+    
+    # Start with all roles
+    grid = df_roles[['id', 'role_name']].copy()
+    grid = grid.rename(columns={'id': 'role_id'})
+    
+    # Initialize all months with 0
+    for m in month_strings:
+        grid[m] = 0.0
+    
+    # Fill in existing staffing data
+    if not df_staffing.empty:
+        df_staffing['Month'] = pd.to_datetime(df_staffing['month_date']).dt.strftime('%Y-%m')
+        
+        for _, staff_row in df_staffing.iterrows():
+            role_mask = grid['role_id'] == staff_row['role_id']
+            month_col = staff_row['Month']
+            if month_col in grid.columns:
+                grid.loc[role_mask, month_col] = staff_row['headcount']
+    
+    # Drop role_id for display (keep role_name as index)
+    grid = grid.drop(columns=['role_id'])
+    
+    return grid
+
+
+# =============================================================================
 # MAIN APPLICATION
 # =============================================================================
 def main():
@@ -727,8 +787,10 @@ def main():
             # Load current config
             try:
                 config = pd.read_sql("SELECT * FROM global_config", engine)
-                def_cash = float(config[config['setting_key'] == 'start_cash']['setting_value'].values[0])
-                def_loc = float(config[config['setting_key'] == 'loc_limit']['setting_value'].values[0])
+                cash_row = config[config['setting_key'] == 'start_cash']
+                loc_row = config[config['setting_key'] == 'loc_limit']
+                def_cash = float(cash_row['setting_value'].values[0]) if not cash_row.empty else 1000000.0
+                def_loc = float(loc_row['setting_value'].values[0]) if not loc_row.empty else 500000.0
             except Exception:
                 def_cash = 1000000.0
                 def_loc = 500000.0
@@ -742,19 +804,23 @@ def main():
             if st.button("💾 Save Constraints"):
                 with engine.connect() as conn:
                     try:
+                        # FIX: Use UPSERT to handle both insert and update cases
+                        upsert_sql = get_config_upsert_sql()
+                        
                         conn.execute(
-                            text("UPDATE global_config SET setting_value = :val WHERE setting_key = 'start_cash'"),
-                            {"val": str(inv_cash)}
+                            text(upsert_sql),
+                            {"key": "start_cash", "val": str(inv_cash)}
                         )
                         conn.execute(
-                            text("UPDATE global_config SET setting_value = :val WHERE setting_key = 'loc_limit'"),
-                            {"val": str(loc_limit)}
+                            text(upsert_sql),
+                            {"key": "loc_limit", "val": str(loc_limit)}
                         )
                         conn.commit()
                         st.success("Constraints saved!")
                     except Exception as e:
                         conn.rollback()
                         st.error(f"Save failed: {e}")
+                        logger.error(f"Config save error: {e}")
 
         with c2:
             st.subheader("Optimization Results")
@@ -1000,29 +1066,40 @@ def main():
             df_roles = pd.read_sql("SELECT * FROM opex_roles", engine)
             df_staffing = pd.read_sql("SELECT * FROM opex_staffing_plan", engine)
             
-            if not df_staffing.empty and not df_roles.empty:
-                df_merged = pd.merge(df_staffing, df_roles, left_on='role_id', right_on='id')
-                df_merged['Month'] = pd.to_datetime(df_merged['month_date']).dt.strftime('%Y-%m')
-                pivot = df_merged.pivot(index='role_name', columns='Month', values='headcount').reset_index()
-            else:
-                pivot = pd.DataFrame(columns=['role_name'])
+            # FIX: Use the new grid builder that shows ALL roles
+            headcount_grid = build_headcount_grid(df_roles, df_staffing)
             
-            edited_pivot = st.data_editor(pivot, use_container_width=True)
+            edited_grid = st.data_editor(
+                headcount_grid, 
+                use_container_width=True,
+                disabled=['role_name'],  # Don't allow editing role names here
+                key="headcount_editor"
+            )
             
             if st.button("💾 Save Headcount"):
                 with engine.connect() as conn:
                     try:
-                        melted = edited_pivot.melt(id_vars=['role_name'], var_name='Month', value_name='headcount')
+                        # Get role_id mapping
+                        role_map = dict(zip(df_roles['role_name'], df_roles['id']))
+                        
+                        # Melt the grid back to long format
+                        month_cols = [c for c in edited_grid.columns if c != 'role_name']
+                        melted = edited_grid.melt(
+                            id_vars=['role_name'], 
+                            value_vars=month_cols,
+                            var_name='Month', 
+                            value_name='headcount'
+                        )
                         
                         for _, r in melted.iterrows():
-                            role_id = conn.execute(
-                                text("SELECT id FROM opex_roles WHERE role_name = :rn"),
-                                {"rn": r['role_name']}
-                            ).scalar()
+                            role_id = role_map.get(r['role_name'])
                             
                             if role_id and pd.notna(r['headcount']):
                                 dt = date.fromisoformat(r['Month'] + "-01")
-                                conn.execute(text(get_upsert_sql()), {"rid": role_id, "dt": dt, "hc": r['headcount']})
+                                conn.execute(
+                                    text(get_upsert_sql()), 
+                                    {"rid": role_id, "dt": dt, "hc": float(r['headcount'])}
+                                )
                         
                         conn.commit()
                         st.success("Headcount saved!")
@@ -1030,34 +1107,67 @@ def main():
                     except Exception as e:
                         conn.rollback()
                         st.error(f"Save failed: {e}")
+                        logger.error(f"Headcount save error: {e}")
             
             st.divider()
             
-            with st.expander("Add/Edit Roles & Salaries"):
+            # -------------------------------------------------------------------
+            # Role Management (Add/Edit/Delete)
+            # -------------------------------------------------------------------
+            with st.expander("➕ Add/Edit Roles & Salaries", expanded=False):
+                st.caption("Add new roles or edit salaries. New roles will appear in the headcount grid after saving.")
+                
                 edited_roles = st.data_editor(
                     df_roles,
-                    column_config={"id": st.column_config.NumberColumn(disabled=True)},
+                    column_config={
+                        "id": st.column_config.NumberColumn("ID", disabled=True),
+                        "role_name": st.column_config.TextColumn("Role Name", required=True),
+                        "annual_salary": st.column_config.NumberColumn("Annual Salary ($)", required=True, min_value=0)
+                    },
                     hide_index=True,
                     use_container_width=True,
-                    num_rows="dynamic"
+                    num_rows="dynamic",
+                    key="roles_editor"
                 )
                 
-                if st.button("💾 Update Roles"):
+                if st.button("💾 Update Roles & Salaries"):
                     with engine.connect() as conn:
                         try:
-                            conn.execute(text("DELETE FROM opex_roles"))
+                            # Get existing role IDs
+                            existing_ids = set(df_roles['id'].tolist())
+                            edited_ids = set()
+                            
                             for _, r in edited_roles.iterrows():
-                                if pd.notna(r['role_name']) and pd.notna(r['annual_salary']):
+                                if pd.isna(r['role_name']) or str(r['role_name']).strip() == '':
+                                    continue
+                                    
+                                if pd.notna(r.get('id')) and r['id'] in existing_ids:
+                                    # Update existing role
+                                    conn.execute(
+                                        text("UPDATE opex_roles SET role_name=:n, annual_salary=:s WHERE id=:id"),
+                                        {"n": r['role_name'], "s": r['annual_salary'], "id": r['id']}
+                                    )
+                                    edited_ids.add(r['id'])
+                                else:
+                                    # Insert new role
                                     conn.execute(
                                         text("INSERT INTO opex_roles (role_name, annual_salary) VALUES (:n, :s)"),
                                         {"n": r['role_name'], "s": r['annual_salary']}
                                     )
+                            
+                            # Delete removed roles
+                            deleted_ids = existing_ids - edited_ids
+                            for del_id in deleted_ids:
+                                conn.execute(text("DELETE FROM opex_staffing_plan WHERE role_id = :id"), {"id": del_id})
+                                conn.execute(text("DELETE FROM opex_roles WHERE id = :id"), {"id": del_id})
+                            
                             conn.commit()
-                            st.success("Roles updated!")
+                            st.success("Roles updated! Refresh to see changes in headcount grid.")
                             st.rerun()
                         except Exception as e:
                             conn.rollback()
                             st.error(f"Update failed: {e}")
+                            logger.error(f"Role update error: {e}")
         
         # -------------------------------------------------------------------
         # Tab 2: R&D Expenses
