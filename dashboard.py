@@ -20,8 +20,8 @@ st.markdown("""
         font-size: 16px;
         border-collapse: collapse;
         width: 100%;
-        color: #000000 !important; /* Force Black Text */
-        background-color: #ffffff; /* Force White Background (Paper Look) */
+        color: #000000 !important;
+        background-color: #ffffff;
         margin-bottom: 20px;
     }
     .financial-table th {
@@ -85,7 +85,6 @@ def get_workdays(year, month, start_threshold=None):
     return valid_days
 
 def format_banker(val):
-    # FIX: Check if value is a number before doing math
     if pd.isna(val) or val == "": return ""
     if isinstance(val, str): return val
     if val < 0: return f"({abs(val):,.0f})"
@@ -260,4 +259,146 @@ elif view == "Financial Statements":
         stmt.loc['Direct Labor'] = safe_sum([('COGS', 'Direct Labor')])
         stmt.loc['Gross Profit'] = stmt.loc['Sales of Goods'] + stmt.loc['Raw Materials'] + stmt.loc['Direct Labor']
         stmt.loc['Operating Expenses'] = ""
-        stmt.loc['Salaries & Wages
+        stmt.loc['Salaries & Wages'] = safe_sum([('OpEx', 'Salaries & Wages')])
+        opex_cols = [c for c in pnl_agg.columns if c[0] == 'OpEx' and c[1] != 'Salaries & Wages']
+        for col in opex_cols: stmt.loc[col[1]] = safe_sum([col])
+        stmt.loc['Total OpEx'] = safe_sum([('OpEx', c[1]) for c in opex_cols]) + stmt.loc['Salaries & Wages']
+        stmt.loc['Net Income'] = stmt.loc['Gross Profit'] + stmt.loc['Total OpEx']
+        
+        render_financial_statement(stmt, "")
+        st.markdown("---")
+        
+        st.header("Statement of Cash Flows")
+        cash_view_indexed = cash_view.set_index('Date')
+        cash_agg = cash_view.groupby([pd.Grouper(key='Date', freq=freq_map[freq]), 'Category']).sum()['Amount'].unstack().fillna(0)
+        if freq == "Monthly": cash_agg.index = cash_agg.index.strftime('%Y-%b')
+        elif freq == "Quarterly": cash_agg.index = cash_agg.index.to_period("Q").astype(str)
+        else: cash_agg.index = cash_agg.index.strftime('%Y')
+        
+        cf = pd.DataFrame(columns=cash_agg.index)
+        cf.loc['Operating Activities'] = ""
+        cf.loc['Cash from Customers'] = cash_agg.get('Cash from Customers', 0)
+        cf.loc['Supplier Payments'] = cash_agg.get('Supplier Deposits', 0) + cash_agg.get('Supplier Settlements', 0)
+        cf.loc['Payroll Paid'] = cash_agg.get('Payroll Paid', 0)
+        cf.loc['OpEx Paid'] = cash_agg.get('OpEx Paid', 0)
+        cf.loc['Net Cash Flow'] = cf.sum()
+        end_bals = cash_view_indexed.resample(freq_map[freq])['Cash_Balance'].last()
+        end_bals.index = cf.columns
+        cf.loc['Ending Cash Balance'] = end_bals
+        
+        render_financial_statement(cf, "")
+
+elif view == "Production & Sales":
+    st.title("Production & Sales Mix")
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        st.subheader("Production Manifest")
+        df_units = pd.read_sql("SELECT * FROM production_unit", engine)
+        edited = st.data_editor(df_units.sort_values('build_date'), column_config={"id": st.column_config.NumberColumn(disabled=True)}, hide_index=True, height=500, use_container_width=True)
+        if st.button("💾 Save Changes"):
+            with engine.connect() as conn:
+                for _, r in edited.iterrows():
+                    conn.execute(text("UPDATE production_unit SET sales_channel=:c, status=:s WHERE id=:i"), {"c": r['sales_channel'], "s": r['status'], "i": r['id']})
+                conn.commit()
+            st.success("Saved!")
+            st.rerun()
+    with c2:
+        st.subheader("Smart Planner")
+        start_date = st.date_input("Production Start", value=date(2026, 1, 1))
+        df_units['Month'] = pd.to_datetime(df_units['build_date']).dt.strftime('%Y-%m')
+        exist = df_units.groupby('Month').size()
+        dates = pd.date_range('2026-01-01', '2027-12-01', freq='MS')
+        plan = [{"Month": d.date(), "Target": int(exist.get(d.strftime('%Y-%m'), 0))} for d in dates]
+        edit_plan = st.data_editor(pd.DataFrame(plan), hide_index=True, height=400)
+        if st.button("🚀 Smart Regenerate"):
+            with st.spinner("Optimizing..."):
+                with engine.connect() as conn:
+                    conn.execute(text("DELETE FROM production_unit WHERE status = 'PLANNED'"))
+                    last_sn = conn.execute(text("SELECT serial_number FROM production_unit ORDER BY id DESC LIMIT 1")).scalar()
+                    sn = int(''.join(filter(str.isdigit, last_sn))) + 1 if last_sn else 1
+                    for _, r in edit_plan.iterrows():
+                        tgt = r['Target']
+                        if tgt == 0: continue
+                        m_str = r['Month'].strftime('%Y-%m')
+                        locked = conn.execute(text(f"SELECT COUNT(*) FROM production_unit WHERE strftime('%Y-%m', build_date) = '{m_str}' AND status != 'PLANNED'")).scalar()
+                        to_build = target - locked
+                        if to_build <= 0: continue
+                        dt_obj = r['Month']
+                        thresh = start_date if dt_obj.year==start_date.year and dt_obj.month==start_date.month else None
+                        if date(dt_obj.year, dt_obj.month, calendar.monthrange(dt_obj.year, dt_obj.month)[1]) < start_date: continue
+                        wd = get_workdays(dt_obj.year, dt_obj.month, thresh)
+                        if not wd: continue
+                        direct = math.floor(to_build * 0.25)
+                        pool = ['DIRECT']*direct + ['DEALER']*(to_build - direct)
+                        d_idx = 0
+                        for t in pool:
+                            conn.execute(text("INSERT INTO production_unit (serial_number, build_date, sales_channel, status) VALUES (:s, :b, :c, 'PLANNED')"), 
+                                         {"s": f"IDX-{sn:04d}", "b": wd[d_idx], "c": t})
+                            sn += 1
+                            d_idx = (d_idx + 1) % len(wd)
+                    conn.commit()
+            st.success("Done!")
+            st.rerun()
+
+elif view == "OpEx Planning":
+    st.title("OpEx Budget")
+    t1, t2 = st.tabs(["Headcount", "Expenses"])
+    with t1:
+        df_r = pd.read_sql("SELECT * FROM opex_roles", engine)
+        df_s = pd.read_sql("SELECT * FROM opex_staffing_plan", engine)
+        df_m = pd.merge(df_s, df_r, left_on='role_id', right_on='id')
+        df_m['Month'] = pd.to_datetime(df_m['month_date']).dt.strftime('%Y-%m')
+        piv = df_m.pivot(index='role_name', columns='Month', values='headcount').reset_index()
+        ed = st.data_editor(piv, use_container_width=True)
+        if st.button("💾 Save Headcount"):
+            with engine.connect() as conn:
+                mlt = ed.melt(id_vars=['role_name'], var_name='Month', value_name='headcount')
+                for _, r in mlt.iterrows():
+                    rid = conn.execute(text("SELECT id FROM opex_roles WHERE role_name=:rn"), {"rn": r['role_name']}).scalar()
+                    if rid:
+                        dt = date.fromisoformat(r['Month']+"-01")
+                        conn.execute(text("INSERT OR REPLACE INTO opex_staffing_plan (id, role_id, month_date, headcount) VALUES ((SELECT id FROM opex_staffing_plan WHERE role_id=:rid AND month_date=:dt), :rid, :dt, :hc)"), {"rid": rid, "dt": dt, "hc": r['headcount']})
+                conn.commit()
+            st.rerun()
+        
+        st.divider()
+        st.subheader("Salary Configuration")
+        edited_roles = st.data_editor(df_r, column_config={"id": st.column_config.NumberColumn(disabled=True)}, hide_index=True, use_container_width=True)
+        if st.button("💾 Update Salaries"):
+            with engine.connect() as conn:
+                for _, r in edited_roles.iterrows():
+                    conn.execute(text("UPDATE opex_roles SET role_name=:n, annual_salary=:s WHERE id=:id"), {"n": r['role_name'], "s": r['annual_salary'], "id": r['id']})
+                conn.commit()
+            st.success("Salaries Updated!")
+            st.rerun()
+
+    with t2:
+        df_g = pd.read_sql("SELECT * FROM opex_general_expenses", engine)
+        df_g['Month'] = pd.to_datetime(df_g['month_date']).dt.strftime('%Y-%m')
+        piv_g = df_g.pivot(index=['category', 'expense_type'], columns='Month', values='amount').reset_index()
+        ed_g = st.data_editor(piv_g, use_container_width=True)
+        if st.button("💾 Save Expenses"):
+            with engine.connect() as conn:
+                mlt_g = ed_g.melt(id_vars=['category', 'expense_type'], var_name='Month', value_name='amount')
+                conn.execute(text("DELETE FROM opex_general_expenses"))
+                for _, r in mlt_g.iterrows():
+                    if pd.notna(r['amount']):
+                        dt = date.fromisoformat(r['Month']+"-01")
+                        conn.execute(text("INSERT INTO opex_general_expenses (category, expense_type, month_date, amount) VALUES (:c, :t, :d, :a)"), {"c": r['category'], "t": r['expense_type'], "d": dt, "a": r['amount']})
+                conn.commit()
+            st.rerun()
+
+elif view == "BOM & Supply Chain":
+    st.title("Bill of Materials")
+    df_p = pd.read_sql("SELECT * FROM part_master", engine)
+    ed_p = st.data_editor(df_p, disabled=["id", "sku"], use_container_width=True)
+    if st.button("💾 Save BOM"):
+        with engine.connect() as conn:
+            for _, r in ed_p.iterrows():
+                conn.execute(text("UPDATE part_master SET name=:n, cost=:c, moq=:m, lead_time=:l, deposit_pct=:dp, deposit_days=:dd, balance_days=:bd WHERE id=:id"), 
+                             {"n": r['name'], "c": r['cost'], "m": r['moq'], "l": r['lead_time'], "dp": r['deposit_pct'], "dd": r['deposit_days'], "bd": r['balance_days'], "id": r['id']})
+            conn.commit()
+        st.rerun()
+
+except Exception as e:
+    st.error(f"System Error: {e}")
