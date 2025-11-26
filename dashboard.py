@@ -184,6 +184,7 @@ def generate_financials():
 try:
     df_pnl, df_cash = generate_financials()
 except Exception as e:
+    st.error(f"Database Error: {e}")
     df_pnl, df_cash = pd.DataFrame(), pd.DataFrame()
 
 # 4. VISUAL LAYOUT
@@ -323,10 +324,11 @@ elif view == "Production & Sales":
                         locked = conn.execute(text(f"SELECT COUNT(*) FROM production_unit WHERE strftime('%Y-%m', build_date) = '{m_str}' AND status != 'PLANNED'")).scalar()
                         to_build = target - locked
                         if to_build <= 0: continue
-                        dt_obj = r['Month']
-                        thresh = start_date if dt_obj.year==start_date.year and dt_obj.month==start_date.month else None
-                        if date(dt_obj.year, dt_obj.month, calendar.monthrange(dt_obj.year, dt_obj.month)[1]) < start_date: continue
-                        wd = get_workdays(dt_obj.year, dt_obj.month, thresh)
+                        tgt = r['Month']
+                        threshold = start_date if tgt.year == start_date.year and tgt.month == start_date.month else None
+                        last_day = date(tgt.year, tgt.month, calendar.monthrange(tgt.year, tgt.month)[1])
+                        if last_day < start_date: continue
+                        wd = get_workdays(tgt.year, tgt.month, threshold)
                         if not wd: continue
                         direct = math.floor(to_build * 0.25)
                         pool = ['DIRECT']*direct + ['DEALER']*(to_build - direct)
@@ -344,6 +346,7 @@ elif view == "OpEx Planning":
     st.title("OpEx Budget")
     t1, t2 = st.tabs(["Headcount", "Expenses"])
     with t1:
+        st.subheader("Headcount Planner")
         df_r = pd.read_sql("SELECT * FROM opex_roles", engine)
         df_s = pd.read_sql("SELECT * FROM opex_staffing_plan", engine)
         df_m = pd.merge(df_s, df_r, left_on='role_id', right_on='id')
@@ -361,13 +364,20 @@ elif view == "OpEx Planning":
                 conn.commit()
             st.rerun()
         
+        # --- SALARY CONFIGURATION ---
         st.divider()
         st.subheader("Salary Configuration")
-        edited_roles = st.data_editor(df_r, column_config={"id": st.column_config.NumberColumn(disabled=True)}, hide_index=True, use_container_width=True)
+        edited_roles = st.data_editor(
+            df_r, 
+            column_config={"id": st.column_config.NumberColumn(disabled=True)}, 
+            hide_index=True,
+            use_container_width=True
+        )
         if st.button("💾 Update Salaries"):
             with engine.connect() as conn:
                 for _, r in edited_roles.iterrows():
-                    conn.execute(text("UPDATE opex_roles SET role_name=:n, annual_salary=:s WHERE id=:id"), {"n": r['role_name'], "s": r['annual_salary'], "id": r['id']})
+                    conn.execute(text("UPDATE opex_roles SET role_name=:n, annual_salary=:s WHERE id=:id"),
+                                 {"n": r['role_name'], "s": r['annual_salary'], "id": r['id']})
                 conn.commit()
             st.success("Salaries Updated!")
             st.rerun()
