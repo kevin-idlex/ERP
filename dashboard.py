@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 import calendar
 import math
 import os
-import seed_db  # Import the seed script for the Rebuild button
+import seed_db
 
 # 1. PAGE SETUP
 st.set_page_config(page_title="IdleX CFO Console", layout="wide")
@@ -78,7 +78,9 @@ def get_workdays(year, month, start_threshold=None):
     return valid_days
 
 def format_banker(val):
-    if pd.isna(val): return "-"
+    # FIX: Check if value is a number before doing math
+    if pd.isna(val) or val == "": return ""
+    if isinstance(val, str): return val
     if val < 0: return f"({abs(val):,.0f})"
     return f"{val:,.0f}"
 
@@ -89,15 +91,16 @@ def render_financial_statement(df, title):
     html += "</tr></thead><tbody>"
     for index, row in df.iterrows():
         clean_index = str(index).strip()
-        row_class = "section-header" if clean_index in ['Revenue', 'Operating Expenses', 'Operating Activities'] else \
+        # Expanded header list to catch 'Cost of Goods Sold'
+        row_class = "section-header" if clean_index in ['Revenue', 'Cost of Goods Sold', 'Operating Expenses', 'Operating Activities'] else \
                     "total-row" if clean_index in ['Gross Profit', 'Net Cash Flow', 'Total OpEx'] else \
                     "grand-total" if clean_index in ['Net Income', 'Ending Cash Balance'] else "indent"
         html += f"<tr class='{row_class}'><td class='row-header'>{clean_index}</td>"
-        is_header = row_class == "section-header"
-        if is_header: 
-            for _ in df.columns: html += "<td></td>"
-        else:
-            for col in df.columns: html += f"<td style='text-align: right;'>{format_banker(row[col])}</td>"
+        
+        # Only skip formatting if it's a section header AND the data is empty
+        # Otherwise try to format it (handled safely by format_banker now)
+        for col in df.columns: 
+            html += f"<td style='text-align: right;'>{format_banker(row[col])}</td>"
         html += "</tr>"
     html += "</tbody></table>"
     st.markdown(html, unsafe_allow_html=True)
@@ -114,10 +117,8 @@ def generate_financials():
         df_gen_exp = pd.read_sql("SELECT * FROM opex_general_expenses", engine)
         config = pd.read_sql("SELECT * FROM global_config", engine)
     except Exception:
-        # Return empty if tables missing (triggers the initialize button)
         return pd.DataFrame(), pd.DataFrame()
 
-    # Process Dates
     df_units['build_date'] = pd.to_datetime(df_units['build_date'])
     df_opex['month_date'] = pd.to_datetime(df_opex['month_date'])
     df_gen_exp['month_date'] = pd.to_datetime(df_gen_exp['month_date'])
@@ -188,7 +189,7 @@ except Exception as e:
 # 4. VISUAL LAYOUT
 st.sidebar.title("IdleX CFO Console")
 
-# --- ADMIN TOOLS (THE FIX FOR EMPTY TABLES) ---
+# Admin Tools
 if st.sidebar.button("⚠️ Rebuild Database"):
     with st.spinner("Resetting Database to V7 Defaults..."):
         seed_db.run_seed()
@@ -197,7 +198,6 @@ if st.sidebar.button("⚠️ Rebuild Database"):
 
 view = st.sidebar.radio("Navigation", ["Executive Dashboard", "Financial Statements", "Production & Sales", "OpEx Planning", "BOM & Supply Chain"])
 
-# Global Filter
 if not df_pnl.empty:
     years = sorted(df_pnl['Date'].dt.year.unique().tolist())
     st.sidebar.divider()
@@ -329,8 +329,8 @@ elif view == "Production & Sales":
                         if date(dt_obj.year, dt_obj.month, calendar.monthrange(dt_obj.year, dt_obj.month)[1]) < start_date: continue
                         wd = get_workdays(dt_obj.year, dt_obj.month, thresh)
                         if not wd: continue
-                        direct = math.floor(build*0.25)
-                        pool = ['DIRECT']*direct + ['DEALER']*(build-d_qty)
+                        d_qty = math.floor(build*0.25)
+                        pool = ['DIRECT']*d_qty + ['DEALER']*(build-d_qty)
                         d_idx = 0
                         for t in pool:
                             conn.execute(text("INSERT INTO production_unit (serial_number, build_date, sales_channel, status) VALUES (:s, :b, :c, 'PLANNED')"), 
@@ -343,9 +343,8 @@ elif view == "Production & Sales":
 
 elif view == "OpEx Planning":
     st.title("OpEx Budget")
-    tab1, tab2 = st.tabs(["Headcount", "R&D Expenses"])
-    with tab1:
-        st.subheader("Headcount Planner")
+    t1, t2 = st.tabs(["Headcount", "Expenses"])
+    with t1:
         df_r = pd.read_sql("SELECT * FROM opex_roles", engine)
         df_s = pd.read_sql("SELECT * FROM opex_staffing_plan", engine)
         df_m = pd.merge(df_s, df_r, left_on='role_id', right_on='id')
@@ -365,7 +364,6 @@ elif view == "OpEx Planning":
         
         st.divider()
         st.subheader("Salary Configuration")
-        # --- THE FIX: Added the Salary Table Here ---
         edited_roles = st.data_editor(
             df_r, 
             column_config={"id": st.column_config.NumberColumn(disabled=True)}, 
@@ -381,7 +379,7 @@ elif view == "OpEx Planning":
             st.success("Salaries Updated!")
             st.rerun()
 
-    with tab2:
+    with t2:
         df_g = pd.read_sql("SELECT * FROM opex_general_expenses", engine)
         df_g['Month'] = pd.to_datetime(df_g['month_date']).dt.strftime('%Y-%m')
         piv_g = df_g.pivot(index=['category', 'expense_type'], columns='Month', values='amount').reset_index()

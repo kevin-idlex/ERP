@@ -77,4 +77,4 @@ def analyze_database():
     print("DIAGNOSTIC COMPLETE")
 
 if __name__ == "__main__":
-    analyze_database()
+    analyze_database()python inspect_db.py
