@@ -1,6 +1,6 @@
 """
 IdleX CFO Console - Dashboard Application
-Version: 3.3 (Bug Fixes: Constraints Save + Role Visibility)
+Version: 3.4 (Live Constraint Metrics + Auto-Optimization)
 Includes: Scenario & Optimization Engine, Smart Production Scheduler, GAAP Financials
 """
 
@@ -82,6 +82,19 @@ st.markdown("""
     }
     .financial-table .indent {
         padding-left: 25px;
+    }
+    .metric-card {
+        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+        border-radius: 10px;
+        padding: 15px;
+        margin: 5px 0;
+        border-left: 4px solid #10B981;
+    }
+    .metric-card.warning {
+        border-left-color: #F59E0B;
+    }
+    .metric-card.danger {
+        border-left-color: #EF4444;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -437,15 +450,6 @@ def generate_financials(units_override: pd.DataFrame = None, start_cash_override
 def simulate_growth_scenario(start_units: int, growth_pct: float, start_date: date, months: int = 36) -> pd.DataFrame:
     """
     Generate simulated production units for growth scenario analysis.
-    
-    Args:
-        start_units: Initial monthly production volume
-        growth_pct: Month-over-month growth percentage
-        start_date: Simulation start date
-        months: Number of months to simulate
-    
-    Returns:
-        DataFrame of simulated production units
     """
     sim_units = []
     current_units = start_units
@@ -471,10 +475,8 @@ def simulate_growth_scenario(start_units: int, growth_pct: float, start_date: da
                 })
                 serial_counter += 1
         
-        # Apply growth
         current_units = current_units * (1 + (growth_pct / 100))
         
-        # Advance month
         if current_date.month == 12:
             current_date = date(current_date.year + 1, 1, 1)
         else:
@@ -488,18 +490,12 @@ def find_max_growth_rate(start_units: int, start_cash: float, credit_limit: floa
     """
     Binary search to find maximum sustainable growth rate.
     
-    Args:
-        start_units: Initial monthly production
-        start_cash: Starting cash balance
-        credit_limit: Maximum negative cash allowed (as positive number)
-        start_date: Simulation start date
-        months: Simulation horizon
-    
     Returns:
-        Tuple of (best_growth_rate, best_cash_dataframe)
+        Tuple of (best_growth_rate, best_cash_dataframe, total_units, total_revenue)
     """
     best_rate = 0.0
     best_cash_df = pd.DataFrame()
+    best_pnl_df = pd.DataFrame()
     floor_limit = -credit_limit
     
     low, high = GROWTH_RATE_MIN, GROWTH_RATE_MAX
@@ -508,34 +504,67 @@ def find_max_growth_rate(start_units: int, start_cash: float, credit_limit: floa
         mid = (low + high) / 2
         
         sim_units = simulate_growth_scenario(start_units, mid, start_date, months)
-        _, sim_cash = generate_financials(units_override=sim_units, start_cash_override=start_cash)
+        sim_pnl, sim_cash = generate_financials(units_override=sim_units, start_cash_override=start_cash)
         
         min_cash = sim_cash['Cash_Balance'].min() if not sim_cash.empty else 0
         
         if min_cash >= floor_limit:
             best_rate = mid
             best_cash_df = sim_cash
+            best_pnl_df = sim_pnl
             low = mid
         else:
             high = mid
     
-    return best_rate, best_cash_df
+    # Calculate summary metrics
+    total_units = len(simulate_growth_scenario(start_units, best_rate, start_date, months))
+    total_revenue = best_pnl_df[best_pnl_df['Category'] == 'Sales of Goods']['Amount'].sum() if not best_pnl_df.empty else 0
+    
+    return best_rate, best_cash_df, total_units, total_revenue
+
+
+def quick_scenario_metrics(start_units: int, growth_pct: float, start_cash: float, 
+                           credit_limit: float, start_date: date, months: int) -> dict:
+    """
+    Quickly calculate key metrics for a given scenario.
+    
+    Returns:
+        Dictionary with total_units, total_revenue, min_cash, is_feasible
+    """
+    sim_units = simulate_growth_scenario(start_units, growth_pct, start_date, months)
+    sim_pnl, sim_cash = generate_financials(units_override=sim_units, start_cash_override=start_cash)
+    
+    if sim_cash.empty:
+        return {
+            'total_units': 0,
+            'total_revenue': 0,
+            'min_cash': start_cash,
+            'end_cash': start_cash,
+            'is_feasible': True
+        }
+    
+    total_revenue = sim_pnl[sim_pnl['Category'] == 'Sales of Goods']['Amount'].sum() if not sim_pnl.empty else 0
+    min_cash = sim_cash['Cash_Balance'].min()
+    end_cash = sim_cash.iloc[-1]['Cash_Balance']
+    
+    return {
+        'total_units': len(sim_units),
+        'total_revenue': total_revenue,
+        'min_cash': min_cash,
+        'end_cash': end_cash,
+        'is_feasible': min_cash >= -credit_limit
+    }
 
 
 # =============================================================================
 # PRODUCTION SCHEDULER
 # =============================================================================
 def regenerate_production_schedule(edit_plan: pd.DataFrame, start_date: date) -> None:
-    """
-    Regenerate production schedule based on target plan.
-    Preserves WIP and completed units, only regenerates PLANNED units.
-    """
+    """Regenerate production schedule based on target plan."""
     with engine.connect() as conn:
         try:
-            # Delete only planned units
             conn.execute(text("DELETE FROM production_unit WHERE status = 'PLANNED'"))
             
-            # Get next serial number
             last_sn = conn.execute(
                 text("SELECT serial_number FROM production_unit ORDER BY id DESC LIMIT 1")
             ).scalar()
@@ -552,7 +581,6 @@ def regenerate_production_schedule(edit_plan: pd.DataFrame, start_date: date) ->
                 
                 month_str = month_date.strftime('%Y-%m')
                 
-                # Count locked units using parameterized query
                 year_month_sql = get_year_month_sql('build_date')
                 locked_count = conn.execute(
                     text(f"SELECT COUNT(*) FROM production_unit WHERE {year_month_sql} = :ms AND status != 'PLANNED'"),
@@ -563,11 +591,9 @@ def regenerate_production_schedule(edit_plan: pd.DataFrame, start_date: date) ->
                 if to_build <= 0:
                     continue
                 
-                # Determine threshold for partial months
                 is_start_month = (month_date.year == start_date.year and month_date.month == start_date.month)
                 threshold = start_date if is_start_month else None
                 
-                # Skip months before start date
                 last_day = date(month_date.year, month_date.month, calendar.monthrange(month_date.year, month_date.month)[1])
                 if last_day < start_date:
                     continue
@@ -576,11 +602,9 @@ def regenerate_production_schedule(edit_plan: pd.DataFrame, start_date: date) ->
                 if not workdays:
                     continue
                 
-                # Calculate channel mix
                 direct_count = int(to_build * DIRECT_SALES_TARGET_PCT)
                 pool = ['DIRECT'] * direct_count + ['DEALER'] * (to_build - direct_count)
                 
-                # Create units
                 for idx, channel in enumerate(pool):
                     build_day = workdays[idx % len(workdays)]
                     conn.execute(
@@ -590,11 +614,9 @@ def regenerate_production_schedule(edit_plan: pd.DataFrame, start_date: date) ->
                     next_sn += 1
             
             conn.commit()
-            logger.info("Production schedule regenerated successfully")
             
         except Exception as e:
             conn.rollback()
-            logger.error(f"Schedule regeneration failed: {e}")
             raise
 
 
@@ -605,7 +627,6 @@ def render_expense_tab(expense_type: str) -> None:
     """Render an expense budget tab (R&D or SG&A)."""
     st.subheader(f"{expense_type} Budget")
     
-    # Use parameterized query for safety
     df_expenses = pd.read_sql(
         text("SELECT * FROM opex_general_expenses WHERE expense_type = :et"),
         engine,
@@ -629,13 +650,11 @@ def render_expense_tab(expense_type: str) -> None:
     if st.button(f"💾 Save {expense_type} Budget", key=f"save_btn_{expense_type}"):
         with engine.connect() as conn:
             try:
-                # Delete existing entries for this expense type
                 conn.execute(
                     text("DELETE FROM opex_general_expenses WHERE expense_type = :et"),
                     {"et": expense_type}
                 )
                 
-                # Insert updated entries
                 melted = edited_exp.melt(id_vars=['category'], var_name='Month', value_name='amount')
                 
                 for _, r in melted.iterrows():
@@ -661,32 +680,19 @@ def render_expense_tab(expense_type: str) -> None:
 # HEADCOUNT GRID BUILDER
 # =============================================================================
 def build_headcount_grid(df_roles: pd.DataFrame, df_staffing: pd.DataFrame) -> pd.DataFrame:
-    """
-    Build a complete headcount grid showing ALL roles, even those without staffing entries.
-    
-    Args:
-        df_roles: DataFrame of all roles
-        df_staffing: DataFrame of staffing plan entries
-        
-    Returns:
-        Pivoted DataFrame with all roles as rows and months as columns
-    """
+    """Build a complete headcount grid showing ALL roles."""
     if df_roles.empty:
         return pd.DataFrame(columns=['role_name'])
     
-    # Define the month range for the grid
     months = pd.date_range('2026-01-01', '2027-12-01', freq='MS')
     month_strings = [m.strftime('%Y-%m') for m in months]
     
-    # Start with all roles
     grid = df_roles[['id', 'role_name']].copy()
     grid = grid.rename(columns={'id': 'role_id'})
     
-    # Initialize all months with 0
     for m in month_strings:
         grid[m] = 0.0
     
-    # Fill in existing staffing data
     if not df_staffing.empty:
         df_staffing['Month'] = pd.to_datetime(df_staffing['month_date']).dt.strftime('%Y-%m')
         
@@ -696,7 +702,6 @@ def build_headcount_grid(df_roles: pd.DataFrame, df_staffing: pd.DataFrame) -> p
             if month_col in grid.columns:
                 grid.loc[role_mask, month_col] = staff_row['headcount']
     
-    # Drop role_id for display (keep role_name as index)
     grid = grid.drop(columns=['role_id'])
     
     return grid
@@ -739,6 +744,7 @@ def main():
     # =========================================================================
     if view == "Executive Dashboard":
         st.title("Executive Dashboard")
+        st.caption("📊 Showing actual production data from database")
         
         if not df_pnl.empty:
             years = sorted(df_pnl['Date'].dt.year.unique().tolist())
@@ -778,58 +784,77 @@ def main():
     # =========================================================================
     elif view == "Scenario & Optimization":
         st.title("Growth Strategy Engine")
+        st.caption("🔮 Simulation tool — adjust parameters to see projected outcomes")
+        
+        # Load current config
+        try:
+            config = pd.read_sql("SELECT * FROM global_config", engine)
+            cash_row = config[config['setting_key'] == 'start_cash']
+            loc_row = config[config['setting_key'] == 'loc_limit']
+            def_cash = float(cash_row['setting_value'].values[0]) if not cash_row.empty else 1000000.0
+            def_loc = float(loc_row['setting_value'].values[0]) if not loc_row.empty else 500000.0
+        except Exception:
+            def_cash = 1000000.0
+            def_loc = 500000.0
+        
+        # Initialize session state for results
+        if 'opt_results' not in st.session_state:
+            st.session_state.opt_results = None
         
         c1, c2 = st.columns([1, 2])
         
         with c1:
-            st.subheader("Constraints")
+            st.subheader("📝 Constraints")
             
-            # Load current config
-            try:
-                config = pd.read_sql("SELECT * FROM global_config", engine)
-                cash_row = config[config['setting_key'] == 'start_cash']
-                loc_row = config[config['setting_key'] == 'loc_limit']
-                def_cash = float(cash_row['setting_value'].values[0]) if not cash_row.empty else 1000000.0
-                def_loc = float(loc_row['setting_value'].values[0]) if not loc_row.empty else 500000.0
-            except Exception:
-                def_cash = 1000000.0
-                def_loc = 500000.0
+            inv_cash = st.number_input(
+                "Investor Equity ($)", 
+                value=def_cash, 
+                step=100000.0, 
+                format="%.0f",
+                key="inv_cash"
+            )
+            loc_limit = st.number_input(
+                "Bank Credit Limit ($)", 
+                value=def_loc, 
+                step=100000.0, 
+                format="%.0f",
+                key="loc_limit"
+            )
+            start_vol = st.number_input(
+                "Starting Monthly Units", 
+                value=50, 
+                min_value=1,
+                key="start_vol"
+            )
+            sim_months = st.slider(
+                "Forecast Horizon (Months)", 
+                12, 60, 36,
+                key="sim_months"
+            )
+            sim_start = st.date_input(
+                "Start Date", 
+                value=date(2026, 1, 1),
+                key="sim_start"
+            )
             
-            inv_cash = st.number_input("Investor Equity ($)", value=def_cash, step=100000.0, format="%.0f")
-            loc_limit = st.number_input("Bank Credit Limit ($)", value=def_loc, step=100000.0, format="%.0f")
-            start_vol = st.number_input("Starting Monthly Units", value=50, min_value=1)
-            sim_months = st.slider("Forecast Horizon (Months)", 12, 60, 36)
-            sim_start = st.date_input("Start Date", value=date(2026, 1, 1))
+            st.divider()
             
-            if st.button("💾 Save Constraints"):
+            # SAVE & OPTIMIZE BUTTON
+            if st.button("💾 Save & Optimize", type="primary", use_container_width=True):
+                # Save constraints to database
                 with engine.connect() as conn:
                     try:
-                        # FIX: Use UPSERT to handle both insert and update cases
                         upsert_sql = get_config_upsert_sql()
-                        
-                        conn.execute(
-                            text(upsert_sql),
-                            {"key": "start_cash", "val": str(inv_cash)}
-                        )
-                        conn.execute(
-                            text(upsert_sql),
-                            {"key": "loc_limit", "val": str(loc_limit)}
-                        )
+                        conn.execute(text(upsert_sql), {"key": "start_cash", "val": str(inv_cash)})
+                        conn.execute(text(upsert_sql), {"key": "loc_limit", "val": str(loc_limit)})
                         conn.commit()
-                        st.success("Constraints saved!")
                     except Exception as e:
                         conn.rollback()
                         st.error(f"Save failed: {e}")
-                        logger.error(f"Config save error: {e}")
-
-        with c2:
-            st.subheader("Optimization Results")
-            
-            if st.button("🚀 Solve for Maximum Growth", type="primary"):
-                with st.status("Running optimization...") as status:
-                    status.write("Searching for optimal growth rate...")
-                    
-                    best_rate, best_cash_df = find_max_growth_rate(
+                
+                # Run optimization
+                with st.spinner("Optimizing growth rate..."):
+                    best_rate, best_cash_df, total_units, total_revenue = find_max_growth_rate(
                         start_units=start_vol,
                         start_cash=inv_cash,
                         credit_limit=loc_limit,
@@ -837,50 +862,119 @@ def main():
                         months=sim_months
                     )
                     
-                    status.update(label="Optimization complete!", state="complete")
+                    st.session_state.opt_results = {
+                        'rate': best_rate,
+                        'cash_df': best_cash_df,
+                        'units': total_units,
+                        'revenue': total_revenue,
+                        'inv_cash': inv_cash,
+                        'loc_limit': loc_limit
+                    }
                 
-                st.success(f"**Maximum Sustainable Growth: {best_rate:.1f}% per month**")
-                
-                # Summary metrics
-                if not best_cash_df.empty:
-                    col1, col2, col3 = st.columns(3)
-                    col1.metric("Min Cash Position", f"${best_cash_df['Cash_Balance'].min():,.0f}")
-                    col2.metric("End Cash Position", f"${best_cash_df.iloc[-1]['Cash_Balance']:,.0f}")
-                    col3.metric("Peak Cash", f"${best_cash_df['Cash_Balance'].max():,.0f}")
-                    
-                    fig = px.area(
-                        best_cash_df, x='Date', y='Cash_Balance',
-                        title=f"Projected Cash Flow at {best_rate:.1f}% Monthly Growth",
-                        color_discrete_sequence=['#10B981']
-                    )
-                    fig.add_hline(y=-loc_limit, line_dash="dash", line_color="red", 
-                                  annotation_text=f"Credit Limit (-${loc_limit:,.0f})")
-                    fig.add_hline(y=0, line_dash="dot", line_color="gray")
-                    st.plotly_chart(fig, use_container_width=True)
+                st.rerun()
             
-            # Manual scenario testing
+            # ─────────────────────────────────────────────────────────────────
+            # LIVE RESULTS PANEL (in constraints column)
+            # ─────────────────────────────────────────────────────────────────
+            if st.session_state.opt_results:
+                res = st.session_state.opt_results
+                
+                st.divider()
+                st.subheader("📈 Optimized Projection")
+                
+                # Max Growth Rate - highlighted
+                st.metric(
+                    "Max Growth Rate",
+                    f"{res['rate']:.1f}% /month",
+                    delta=f"{res['rate']*12:.0f}% annualized"
+                )
+                
+                # Key metrics
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("Total Units", f"{res['units']:,}")
+                with col2:
+                    st.metric("Total Revenue", f"${res['revenue']:,.0f}")
+                
+                # Cash metrics
+                if not res['cash_df'].empty:
+                    min_cash = res['cash_df']['Cash_Balance'].min()
+                    end_cash = res['cash_df'].iloc[-1]['Cash_Balance']
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.metric("Min Cash", f"${min_cash:,.0f}")
+                    with col2:
+                        st.metric("End Cash", f"${end_cash:,.0f}")
+                    
+                    # Feasibility indicator
+                    headroom = min_cash + res['loc_limit']
+                    if headroom > 100000:
+                        st.success(f"✅ ${headroom:,.0f} credit headroom")
+                    elif headroom > 0:
+                        st.warning(f"⚠️ ${headroom:,.0f} credit headroom")
+                    else:
+                        st.error(f"❌ Exceeds limit by ${abs(headroom):,.0f}")
+
+        with c2:
+            st.subheader("📊 Projection Results")
+            
+            if st.session_state.opt_results and not st.session_state.opt_results['cash_df'].empty:
+                res = st.session_state.opt_results
+                
+                # Main chart
+                fig = px.area(
+                    res['cash_df'], x='Date', y='Cash_Balance',
+                    title=f"Cash Flow at {res['rate']:.1f}% Monthly Growth",
+                    color_discrete_sequence=['#10B981']
+                )
+                fig.add_hline(y=-res['loc_limit'], line_dash="dash", line_color="red",
+                              annotation_text=f"Credit Limit (-${res['loc_limit']:,.0f})")
+                fig.add_hline(y=0, line_dash="dot", line_color="gray")
+                fig.update_layout(height=400)
+                st.plotly_chart(fig, use_container_width=True)
+                
+            else:
+                st.info("👆 Click **Save & Optimize** to calculate maximum sustainable growth rate")
+            
+            # ─────────────────────────────────────────────────────────────────
+            # MANUAL SCENARIO TEST
+            # ─────────────────────────────────────────────────────────────────
             st.divider()
-            st.subheader("Manual Scenario Test")
+            st.subheader("🧪 Manual Scenario Test")
             
             test_rate = st.slider("Test Growth Rate (%/month)", 0.0, 50.0, 10.0, 0.5)
             
             if st.button("📊 Run Scenario"):
+                metrics = quick_scenario_metrics(
+                    start_units=start_vol,
+                    growth_pct=test_rate,
+                    start_cash=inv_cash,
+                    credit_limit=loc_limit,
+                    start_date=sim_start,
+                    months=sim_months
+                )
+                
+                # Display results
+                col1, col2, col3 = st.columns(3)
+                col1.metric("Units Produced", f"{metrics['total_units']:,}")
+                col2.metric("Total Revenue", f"${metrics['total_revenue']:,.0f}")
+                col3.metric("Min Cash", f"${metrics['min_cash']:,.0f}")
+                
+                if metrics['is_feasible']:
+                    st.success(f"✅ Scenario is FEASIBLE at {test_rate:.1f}% growth")
+                else:
+                    st.error(f"❌ Scenario EXCEEDS credit limit at {test_rate:.1f}% growth")
+                
+                # Show chart
                 sim_units = simulate_growth_scenario(start_vol, test_rate, sim_start, sim_months)
                 _, sim_cash = generate_financials(units_override=sim_units, start_cash_override=inv_cash)
                 
                 if not sim_cash.empty:
-                    min_cash = sim_cash['Cash_Balance'].min()
-                    feasible = min_cash >= -loc_limit
-                    
-                    if feasible:
-                        st.success(f"✅ Scenario is FEASIBLE. Min cash: ${min_cash:,.0f}")
-                    else:
-                        st.error(f"❌ Scenario EXCEEDS credit limit. Min cash: ${min_cash:,.0f}")
-                    
                     fig = px.area(
                         sim_cash, x='Date', y='Cash_Balance',
                         title=f"Scenario: {test_rate:.1f}% Monthly Growth",
-                        color_discrete_sequence=['#3B82F6' if feasible else '#EF4444']
+                        color_discrete_sequence=['#3B82F6' if metrics['is_feasible'] else '#EF4444']
                     )
                     fig.add_hline(y=-loc_limit, line_dash="dash", line_color="red")
                     fig.add_hline(y=0, line_dash="dot", line_color="gray")
@@ -899,9 +993,6 @@ def main():
             
             freq_map = {"Monthly": "ME", "Quarterly": "QE", "Yearly": "YE"}
             
-            # -------------------------------------------------------------------
-            # Income Statement
-            # -------------------------------------------------------------------
             st.header("Consolidated Statement of Operations")
             
             pnl_agg = df_pnl.groupby(
@@ -924,7 +1015,6 @@ def main():
                         total += pnl_agg[k]
                 return total
 
-            # Build statement with None for section headers (avoids str+float error)
             stmt.loc['Revenue'] = None
             stmt.loc['Sales of Goods'] = safe_sum([('Revenue', 'Sales of Goods')])
             stmt.loc['Cost of Goods Sold'] = None
@@ -944,9 +1034,6 @@ def main():
             render_financial_statement(stmt, "")
             st.markdown("---")
             
-            # -------------------------------------------------------------------
-            # Cash Flow Statement
-            # -------------------------------------------------------------------
             st.header("Statement of Cash Flows")
             
             cash_agg = df_cash.groupby(
@@ -967,7 +1054,6 @@ def main():
             cf.loc['Payroll Paid'] = cash_agg.get('Payroll Paid', pd.Series(0, index=cash_agg.index))
             cf.loc['OpEx Paid'] = cash_agg.get('OpEx Paid', pd.Series(0, index=cash_agg.index))
             
-            # Explicit sum to avoid type error with None headers
             cf.loc['Net Cash Flow'] = (
                 cf.loc['Cash from Customers'] +
                 cf.loc['Supplier Payments'] +
@@ -975,7 +1061,6 @@ def main():
                 cf.loc['OpEx Paid']
             )
             
-            # Ending balances
             cash_indexed = df_cash.set_index('Date')
             end_bals = cash_indexed.resample(freq_map[freq])['Cash_Balance'].last()
             
@@ -984,7 +1069,6 @@ def main():
                 cf.loc['Ending Cash Balance'] = end_bals
             else:
                 cf.loc['Ending Cash Balance'] = None
-                logger.warning("Cash balance index mismatch")
             
             render_financial_statement(cf, "")
         else:
@@ -1057,32 +1141,26 @@ def main():
         
         tab1, tab2, tab3 = st.tabs(["A. Headcount & Payroll", "B. R&D Expenses", "C. SG&A Expenses"])
         
-        # -------------------------------------------------------------------
-        # Tab 1: Headcount
-        # -------------------------------------------------------------------
         with tab1:
             st.subheader("Headcount Planner")
             
             df_roles = pd.read_sql("SELECT * FROM opex_roles", engine)
             df_staffing = pd.read_sql("SELECT * FROM opex_staffing_plan", engine)
             
-            # FIX: Use the new grid builder that shows ALL roles
             headcount_grid = build_headcount_grid(df_roles, df_staffing)
             
             edited_grid = st.data_editor(
                 headcount_grid, 
                 use_container_width=True,
-                disabled=['role_name'],  # Don't allow editing role names here
+                disabled=['role_name'],
                 key="headcount_editor"
             )
             
             if st.button("💾 Save Headcount"):
                 with engine.connect() as conn:
                     try:
-                        # Get role_id mapping
                         role_map = dict(zip(df_roles['role_name'], df_roles['id']))
                         
-                        # Melt the grid back to long format
                         month_cols = [c for c in edited_grid.columns if c != 'role_name']
                         melted = edited_grid.melt(
                             id_vars=['role_name'], 
@@ -1107,13 +1185,9 @@ def main():
                     except Exception as e:
                         conn.rollback()
                         st.error(f"Save failed: {e}")
-                        logger.error(f"Headcount save error: {e}")
             
             st.divider()
             
-            # -------------------------------------------------------------------
-            # Role Management (Add/Edit/Delete)
-            # -------------------------------------------------------------------
             with st.expander("➕ Add/Edit Roles & Salaries", expanded=False):
                 st.caption("Add new roles or edit salaries. New roles will appear in the headcount grid after saving.")
                 
@@ -1133,7 +1207,6 @@ def main():
                 if st.button("💾 Update Roles & Salaries"):
                     with engine.connect() as conn:
                         try:
-                            # Get existing role IDs
                             existing_ids = set(df_roles['id'].tolist())
                             edited_ids = set()
                             
@@ -1142,42 +1215,32 @@ def main():
                                     continue
                                     
                                 if pd.notna(r.get('id')) and r['id'] in existing_ids:
-                                    # Update existing role
                                     conn.execute(
                                         text("UPDATE opex_roles SET role_name=:n, annual_salary=:s WHERE id=:id"),
                                         {"n": r['role_name'], "s": r['annual_salary'], "id": r['id']}
                                     )
                                     edited_ids.add(r['id'])
                                 else:
-                                    # Insert new role
                                     conn.execute(
                                         text("INSERT INTO opex_roles (role_name, annual_salary) VALUES (:n, :s)"),
                                         {"n": r['role_name'], "s": r['annual_salary']}
                                     )
                             
-                            # Delete removed roles
                             deleted_ids = existing_ids - edited_ids
                             for del_id in deleted_ids:
                                 conn.execute(text("DELETE FROM opex_staffing_plan WHERE role_id = :id"), {"id": del_id})
                                 conn.execute(text("DELETE FROM opex_roles WHERE id = :id"), {"id": del_id})
                             
                             conn.commit()
-                            st.success("Roles updated! Refresh to see changes in headcount grid.")
+                            st.success("Roles updated!")
                             st.rerun()
                         except Exception as e:
                             conn.rollback()
                             st.error(f"Update failed: {e}")
-                            logger.error(f"Role update error: {e}")
         
-        # -------------------------------------------------------------------
-        # Tab 2: R&D Expenses
-        # -------------------------------------------------------------------
         with tab2:
             render_expense_tab("R&D")
         
-        # -------------------------------------------------------------------
-        # Tab 3: SG&A Expenses
-        # -------------------------------------------------------------------
         with tab3:
             render_expense_tab("SG&A")
 
