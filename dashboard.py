@@ -3,10 +3,11 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 from datetime import timedelta, date
 import plotly.express as px
+import plotly.graph_objects as go
 import calendar
 import math
 import os
-import seed_db  # <--- IMPORT THE SEED SCRIPT
+import seed_db
 
 # 1. PAGE SETUP
 st.set_page_config(page_title="IdleX CFO Console", layout="wide")
@@ -68,9 +69,9 @@ def generate_financials():
         pnl_date = unit['build_date']
         cash_lag = 0 if unit['sales_channel'] == 'DIRECT' else 30
         
-        ledger.append({"Date": pnl_date, "Category": "Revenue", "Type": "Revenue", "Amount": rev_amt, "Report": "PnL"})
-        ledger.append({"Date": pnl_date + timedelta(days=cash_lag), "Category": "Collections", "Type": "Cash", "Amount": rev_amt, "Report": "Cash"})
-        ledger.append({"Date": pnl_date, "Category": "Material Cost", "Type": "COGS", "Amount": -unit_mat_cost, "Report": "PnL"})
+        ledger.append({"Date": pnl_date, "Category": "Sales Revenue", "Type": "Revenue", "Amount": rev_amt, "Report": "PnL"})
+        ledger.append({"Date": pnl_date + timedelta(days=cash_lag), "Category": "Cash from Sales", "Type": "Operations", "Amount": rev_amt, "Report": "Cash"})
+        ledger.append({"Date": pnl_date, "Category": "Cost of Goods Sold (Materials)", "Type": "COGS", "Amount": -unit_mat_cost, "Report": "PnL"})
     
     monthly_builds = df_units.groupby(pd.Grouper(key='build_date', freq='MS')).size()
     for month_start, count in monthly_builds.items():
@@ -82,23 +83,28 @@ def generate_financials():
             total_po_cost = bom_row.iloc[0]['qty_per_unit'] * count * part['cost']
             
             if part['deposit_pct'] > 0:
-                ledger.append({"Date": delivery + timedelta(days=int(part['deposit_days'])), "Category": "Material Deposit", "Type": "Cash", "Amount": -(total_po_cost * part['deposit_pct']), "Report": "Cash"})
+                ledger.append({"Date": delivery + timedelta(days=int(part['deposit_days'])), "Category": "Inventory Purchases (Deposits)", "Type": "Operations", "Amount": -(total_po_cost * part['deposit_pct']), "Report": "Cash"})
             if part['deposit_pct'] < 1.0:
-                ledger.append({"Date": delivery + timedelta(days=int(part['balance_days'])), "Category": "Material Balance", "Type": "Cash", "Amount": -(total_po_cost * (1 - part['deposit_pct'])), "Report": "Cash"})
+                ledger.append({"Date": delivery + timedelta(days=int(part['balance_days'])), "Category": "Inventory Purchases (Balances)", "Type": "Operations", "Amount": -(total_po_cost * (1 - part['deposit_pct'])), "Report": "Cash"})
 
     opex_merged = pd.merge(df_opex, df_roles, left_on='role_id', right_on='id')
     for _, row in opex_merged.iterrows():
         cost = (row['annual_salary']/12) * row['headcount']
         if cost > 0:
-            cat = "Direct Labor" if "Assembler" in row['role_name'] else "Payroll (SG&A/R&D)"
-            pnl_type = "COGS" if "Assembler" in row['role_name'] else "OpEx"
-            ledger.append({"Date": row['month_date'], "Category": cat, "Type": pnl_type, "Amount": -cost, "Report": "PnL"})
-            ledger.append({"Date": row['month_date'], "Category": "Payroll", "Type": "Cash", "Amount": -cost, "Report": "Cash"})
+            if "Assembler" in row['role_name']:
+                cat_pnl = "Direct Labor"
+                type_pnl = "COGS"
+            else:
+                cat_pnl = "Salaries & Benefits"
+                type_pnl = "OpEx"
+            
+            ledger.append({"Date": row['month_date'], "Category": cat_pnl, "Type": type_pnl, "Amount": -cost, "Report": "PnL"})
+            ledger.append({"Date": row['month_date'], "Category": "Payroll Outflow", "Type": "Operations", "Amount": -cost, "Report": "Cash"})
 
     for _, row in df_gen_exp.iterrows():
         if row['amount'] > 0:
-            ledger.append({"Date": row['month_date'], "Category": row['expense_type'], "Type": "OpEx", "Amount": -row['amount'], "Report": "PnL"})
-            ledger.append({"Date": row['month_date'], "Category": "OpEx Spend", "Type": "Cash", "Amount": -row['amount'], "Report": "Cash"})
+            ledger.append({"Date": row['month_date'], "Category": f"{row['expense_type']} Expenses", "Type": "OpEx", "Amount": -row['amount'], "Report": "PnL"})
+            ledger.append({"Date": row['month_date'], "Category": "General Expenses", "Type": "Operations", "Amount": -row['amount'], "Report": "Cash"})
 
     if not ledger: return pd.DataFrame(), pd.DataFrame()
     
@@ -108,36 +114,27 @@ def generate_financials():
     df_cash['Cash_Balance'] = df_cash['Amount'].cumsum() + start_cash
     return df_pnl, df_cash
 
-# 3. EXECUTE WITH ERROR HANDLING (THE CLOUD FIX)
+# 3. EXECUTE WITH ERROR HANDLING
 try:
     df_pnl, df_cash = generate_financials()
 except Exception as e:
-    # --- DATABASE INITIALIZER SCREEN ---
-    st.warning("⚠️ Database Connection Failed or Database Empty")
-    st.error(f"Error Details: {e}")
-    
-    st.info("This is normal for a first-time Cloud Deployment. Click below to build the database tables.")
-    
+    st.warning("⚠️ Database Empty or Connection Failed")
+    st.error(f"Error: {e}")
     if st.button("🚀 INITIALIZE CLOUD DATABASE", type="primary"):
-        with st.spinner("Running Seed Script..."):
-            try:
-                seed_db.run_seed()
-                st.success("Database Built Successfully! Refreshing...")
-                st.rerun()
-            except Exception as seed_err:
-                st.error(f"Seed Failed: {seed_err}")
-    
-    st.stop() # Stop here so the app doesn't crash further down
+        with st.spinner("Seeding..."):
+            seed_db.run_seed()
+            st.rerun()
+    st.stop()
 
-# 4. VISUAL LAYOUT (Only runs if DB is healthy)
+# 4. VISUAL LAYOUT
 st.sidebar.title("IdleX CFO Console")
 view = st.sidebar.radio("Navigation", ["Executive Dashboard", "Financial Statements", "Production & Sales", "OpEx Planning", "BOM & Supply Chain"])
 
+# --- FILTER ---
 if not df_pnl.empty:
     years = sorted(df_pnl['Date'].dt.year.unique().tolist())
     st.sidebar.divider()
     selected_period = st.sidebar.selectbox("Fiscal Year:", ["All Time"] + years)
-    
     if selected_period == "All Time":
         pnl_view = df_pnl
         cash_view = df_cash
@@ -147,10 +144,23 @@ if not df_pnl.empty:
 else:
     pnl_view, cash_view = pd.DataFrame(), pd.DataFrame()
 
+# --- FORMATTING HELPERS ---
+def format_currency(val):
+    if pd.isna(val): return ""
+    color = "red" if val < 0 else "black"
+    val_fmt = f"({abs(val):,.0f})" if val < 0 else f"{val:,.0f}"
+    return f'<span style="color:{color}">${val_fmt}</span>'
+
+def create_financial_table(df_grouped):
+    # Transpose: Switch Rows and Columns
+    df_transposed = df_grouped.transpose()
+    # Apply HTML formatting for currency color
+    return df_transposed.style.format(lambda x: format_currency(x)).to_html()
+
 if view == "Executive Dashboard":
-    st.title(f"Dashboard")
+    st.title(f"Executive Dashboard")
     if not pnl_view.empty:
-        rev = pnl_view[pnl_view['Category']=='Revenue']['Amount'].sum()
+        rev = pnl_view[pnl_view['Category']=='Sales Revenue']['Amount'].sum()
         cogs = abs(pnl_view[pnl_view['Type']=='COGS']['Amount'].sum())
         margin = rev - cogs
         min_c = cash_view['Cash_Balance'].min()
@@ -162,37 +172,93 @@ if view == "Executive Dashboard":
         c3.metric("Min Net Cash", f"${min_c:,.0f}", delta_color="inverse")
         c4.metric("Ending Cash", f"${end_c:,.0f}")
         
-        fig = px.area(cash_view, x='Date', y='Cash_Balance', title="Cash Runway", color_discrete_sequence=['#10B981'])
+        st.subheader("Cash Position")
+        fig = px.area(cash_view, x='Date', y='Cash_Balance', title="Liquidity Forecast", color_discrete_sequence=['#10B981'])
         fig.add_hline(y=0, line_dash="dash", line_color="red")
         st.plotly_chart(fig, use_container_width=True)
 
 elif view == "Financial Statements":
     st.title("Financial Statements")
-    if not pnl_view.empty:
-        col1, col2 = st.columns(2)
-        with col1: freq = st.radio("Aggregation:", ["Monthly", "Quarterly", "Yearly"], horizontal=True)
-        freq_map = {"Monthly": "ME", "Quarterly": "QE", "Yearly": "YE"}
-        
-        st.subheader("Profit & Loss")
-        p_piv = pnl_view.groupby([pd.Grouper(key='Date', freq=freq_map[freq]), 'Type']).sum()['Amount'].unstack().fillna(0)
-        for c in ['Revenue', 'COGS', 'OpEx']: 
-            if c not in p_piv: p_piv[c] = 0
-        p_piv['Net Income'] = p_piv['Revenue'] + p_piv['COGS'] + p_piv['OpEx']
-        
-        if freq == "Monthly": p_piv.index = p_piv.index.strftime('%Y-%b')
-        elif freq == "Quarterly": p_piv.index = p_piv.index.to_period("Q").astype(str)
-        else: p_piv.index = p_piv.index.strftime('%Y')
-        
-        st.dataframe(p_piv.style.format("${:,.0f}"), use_container_width=True)
-        
-        st.divider()
-        st.subheader("Cash Flow")
-        c_piv = cash_view.groupby([pd.Grouper(key='Date', freq=freq_map[freq]), 'Category']).sum()['Amount'].unstack().fillna(0)
-        c_piv['Net Change'] = c_piv.sum(axis=1)
-        if freq == "Monthly": c_piv.index = c_piv.index.strftime('%Y-%b')
-        elif freq == "Quarterly": c_piv.index = c_piv.index.to_period("Q").astype(str)
-        else: c_piv.index = c_piv.index.strftime('%Y')
-        st.dataframe(c_piv.style.format("${:,.0f}"), use_container_width=True)
+    
+    col_ctrl1, col_ctrl2 = st.columns(2)
+    with col_ctrl1:
+        freq = st.radio("Period Aggregation:", ["Monthly", "Quarterly", "Yearly"], horizontal=True, index=2)
+    
+    freq_map = {"Monthly": "ME", "Quarterly": "QE", "Yearly": "YE"}
+    
+    # --- GAAP P&L PREPARATION ---
+    st.header("Consolidated Statement of Operations")
+    
+    # 1. Aggregate Data
+    pnl_agg = pnl_view.groupby([pd.Grouper(key='Date', freq=freq_map[freq]), 'Type', 'Category']).sum()['Amount'].unstack(level=[1,2]).fillna(0)
+    
+    # Format Dates for Columns
+    if freq == "Monthly": pnl_agg.index = pnl_agg.index.strftime('%Y-%b')
+    elif freq == "Quarterly": pnl_agg.index = pnl_agg.index.to_period("Q").astype(str)
+    else: pnl_agg.index = pnl_agg.index.strftime('%Y')
+    
+    # 2. Build the Statement Rows (The GAAP Structure)
+    statement = pd.DataFrame(columns=pnl_agg.index)
+    
+    # Helper to safely sum categories if they exist
+    def safe_sum(row_keys, is_neg=False):
+        total = pd.Series(0, index=pnl_agg.index)
+        for key in row_keys:
+            if key in pnl_agg.columns:
+                total += pnl_agg[key]
+        return total if not is_neg else -total
+
+    # Top Line
+    statement.loc['Revenue'] = safe_sum([('Revenue', 'Sales Revenue')])
+    
+    # Cost of Sales
+    cogs_cols = [c for c in pnl_agg.columns if c[0] == 'COGS']
+    statement.loc['Cost of Goods Sold'] = safe_sum(cogs_cols)
+    statement.loc['Gross Profit'] = statement.loc['Revenue'] + statement.loc['Cost of Goods Sold']
+    
+    # Expenses
+    opex_cols = [c for c in pnl_agg.columns if c[0] == 'OpEx']
+    statement.loc['Operating Expenses'] = safe_sum(opex_cols)
+    
+    # Bottom Line
+    statement.loc['Net Income'] = statement.loc['Gross Profit'] + statement.loc['Operating Expenses']
+    
+    # Margins (Optional Rows)
+    statement.loc['Gross Margin %'] = (statement.loc['Gross Profit'] / statement.loc['Revenue'] * 100).fillna(0)
+    
+    # Formatting for clean display
+    # We want specific rows to be bold, but Streamlit dataframe is limited. 
+    # We will transpose so Time is columns (Standard accounting format).
+    
+    st.markdown(create_financial_table(statement), unsafe_allow_html=True)
+
+    st.markdown("---")
+
+    # --- GAAP CASH FLOW ---
+    st.header("Statement of Cash Flows")
+    st.caption("Direct Method")
+    
+    cash_agg = cash_view.groupby([pd.Grouper(key='Date', freq=freq_map[freq]), 'Category']).sum()['Amount'].unstack().fillna(0)
+    if freq == "Monthly": cash_agg.index = cash_agg.index.strftime('%Y-%b')
+    elif freq == "Quarterly": cash_agg.index = cash_agg.index.to_period("Q").astype(str)
+    else: cash_agg.index = cash_agg.index.strftime('%Y')
+    
+    cf_stmt = pd.DataFrame(columns=cash_agg.index)
+    
+    # Operating Activities
+    cf_stmt.loc['Cash from Customers'] = cash_agg.get('Collections', 0)
+    cf_stmt.loc['Cash Paid to Suppliers'] = cash_agg.get('Material Deposit', 0) + cash_agg.get('Material Balance', 0)
+    cf_stmt.loc['Cash Paid for Payroll'] = cash_agg.get('Payroll', 0)
+    cf_stmt.loc['Cash Paid for OpEx'] = cash_agg.get('OpEx Spend', 0)
+    cf_stmt.loc['Net Cash Flow'] = cf_stmt.sum()
+    
+    # Ending Balance logic
+    end_bals = cash_view.resample(freq_map[freq])['Cash_Balance'].last()
+    end_bals.index = cf_stmt.columns # Match indices
+    cf_stmt.loc['Ending Cash Balance'] = end_bals
+    
+    st.markdown(create_financial_table(cf_stmt), unsafe_allow_html=True)
+
 
 elif view == "Production & Sales":
     st.title("Production & Sales Mix")
@@ -200,16 +266,7 @@ elif view == "Production & Sales":
     with c1:
         st.subheader("Production Manifest")
         df_units = pd.read_sql("SELECT * FROM production_unit", engine)
-        edited = st.data_editor(
-            df_units.sort_values('build_date'),
-            column_config={
-                "id": st.column_config.NumberColumn(disabled=True),
-                "serial_number": st.column_config.TextColumn(disabled=True),
-                "build_date": st.column_config.DateColumn(disabled=True),
-                "sales_channel": st.column_config.SelectboxColumn("Type", options=["DIRECT", "DEALER"], required=True),
-                "status": st.column_config.SelectboxColumn("Status", options=["PLANNED", "WIP", "COMPLETE"])
-            }, hide_index=True, height=500, use_container_width=True
-        )
+        edited = st.data_editor(df_units.sort_values('build_date'), hide_index=True, height=500, use_container_width=True)
         if st.button("💾 Save Changes"):
             with engine.connect() as conn:
                 for _, r in edited.iterrows():
@@ -218,10 +275,9 @@ elif view == "Production & Sales":
                 conn.commit()
             st.success("Saved!")
             st.rerun()
-
     with c2:
         st.subheader("Smart Planner")
-        start_date = st.date_input("Production Start", value=date(2026, 1, 1))
+        start_date = st.date_input("Production Start", value=date(2026, 1, 12))
         df_units['Month'] = pd.to_datetime(df_units['build_date']).dt.strftime('%Y-%m')
         exist = df_units.groupby('Month').size()
         dates = pd.date_range('2026-01-01', '2027-12-01', freq='MS')
@@ -232,10 +288,7 @@ elif view == "Production & Sales":
                 with engine.connect() as conn:
                     conn.execute(text("DELETE FROM production_unit WHERE status = 'PLANNED'"))
                     last_sn = conn.execute(text("SELECT serial_number FROM production_unit ORDER BY id DESC LIMIT 1")).scalar()
-                    if last_sn:
-                        sn_counter = int(''.join(filter(str.isdigit, last_sn))) + 1
-                    else:
-                        sn_counter = 1
+                    sn_counter = int(''.join(filter(str.isdigit, last_sn))) + 1 if last_sn else 1
                     for _, row in edit_plan.iterrows():
                         target = row['Target']
                         if target == 0: continue
@@ -244,8 +297,7 @@ elif view == "Production & Sales":
                         to_build = target - locked_count
                         if to_build <= 0: continue
                         tgt = row['Month']
-                        threshold = None
-                        if tgt.year == start_date.year and tgt.month == start_date.month: threshold = start_date
+                        threshold = start_date if tgt.year == start_date.year and tgt.month == start_date.month else None
                         last_day = date(tgt.year, tgt.month, calendar.monthrange(tgt.year, tgt.month)[1])
                         if last_day < start_date: continue
                         wd = get_workdays(tgt.year, tgt.month, threshold)
@@ -264,7 +316,7 @@ elif view == "Production & Sales":
 
 elif view == "OpEx Planning":
     st.title("OpEx Budget")
-    tab1, tab2 = st.tabs(["Headcount & Payroll", "R&D & SG&A"])
+    tab1, tab2 = st.tabs(["Headcount", "R&D Expenses"])
     with tab1:
         df_roles = pd.read_sql("SELECT * FROM opex_roles", engine)
         df_staff = pd.read_sql("SELECT * FROM opex_staffing_plan", engine)
