@@ -148,7 +148,7 @@ else:
     pnl_view, cash_view = pd.DataFrame(), pd.DataFrame()
 
 if view == "Executive Dashboard":
-    st.title(f"Executive Dashboard")
+    st.title(f"Dashboard")
     if not pnl_view.empty:
         rev = pnl_view[pnl_view['Category']=='Revenue']['Amount'].sum()
         cogs = abs(pnl_view[pnl_view['Type']=='COGS']['Amount'].sum())
