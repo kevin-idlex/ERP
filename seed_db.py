@@ -519,37 +519,169 @@ def run_seed():
                 "INSERT INTO opex_roles (role_name, annual_salary, department) VALUES (:name, :salary, :dept)"
             ), {"name": r[0], "salary": r[1], "dept": r[2]})
         
-        # --- Staffing Plan (24 months with growth for assemblers) ---
-        base_headcount = {
-            1: 1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1,  # Exec & Engineering
-            7: 2, 8: 3, 9: 1,  # Assembly & QA (these grow)
-            10: 1, 11: 1, 12: 1, 13: 0  # Support roles
+        # --- Staffing Plan (36 months - Outsourced Manufacturing Model) ---
+        # IdleX uses 100% outsourced manufacturing and sells through dealers
+        # Internal team is lean: Product Development, Supplier Management, Sales
+        #
+        # Staffing scales with REVENUE, not production volume
+        # Revenue milestones: $15M (2026), $85M (2027), $216M (2028)
+        
+        # Monthly revenue for scaling calculations
+        monthly_revenue = {
+            "2026-01": 207000, "2026-02": 276000, "2026-03": 380000, "2026-04": 428000,
+            "2026-05": 552000, "2026-06": 877000, "2026-07": 822000, "2026-08": 1394000,
+            "2026-09": 1753000, "2026-10": 2016000, "2026-11": 3127000, "2026-12": 3265000,
+            "2027-01": 3672000, "2027-02": 4059000, "2027-03": 5502000, "2027-04": 4915000,
+            "2027-05": 6813000, "2027-06": 6040000, "2027-07": 6599000, "2027-08": 9091000,
+            "2027-09": 7953000, "2027-10": 8567000, "2027-11": 11632000, "2027-12": 10218000,
+            "2028-01": 14472000, "2028-02": 12289000, "2028-03": 12966000, "2028-04": 13863000,
+            "2028-05": 18055000, "2028-06": 15738000, "2028-07": 21046000, "2028-08": 18099000,
+            "2028-09": 19410000, "2028-10": 25907000, "2028-11": 22207000, "2028-12": 22366000,
         }
-        for month_offset in range(24):
+        
+        for month_offset in range(36):
             year = 2026 + month_offset // 12
             month = (month_offset % 12) + 1
+            month_key = f"{year}-{month:02d}"
             month_str = f"{year}-{month:02d}-01"
-            growth_factor = 1 + month_offset * 0.04  # 4% growth per month for assemblers
             
-            for role_id, base_hc in base_headcount.items():
-                # Only assemblers and QA grow with production
-                actual_hc = base_hc * growth_factor if role_id in [7, 8, 9] else base_hc
-                if actual_hc > 0:
+            revenue = monthly_revenue.get(month_key, 1000000)
+            annual_run_rate = revenue * 12
+            
+            # Cumulative revenue for installed base calculations
+            cumulative_rev = sum(v for k, v in monthly_revenue.items() if k <= month_key)
+            units_in_field = int(cumulative_rev / 6900)  # Approximate units deployed
+            
+            # Lean staffing model - scales with revenue milestones
+            # Base team through $20M ARR, then add incrementally
+            
+            headcount_by_role = {
+                1: 1,     # CEO - always 1
+                2: 1,     # VP Engineering - always 1
+                3: 1 if annual_run_rate < 50_000_000 else 2,  # VP Operations
+                4: 1 + (annual_run_rate // 50_000_000),       # Mechanical Engineer
+                5: 1 + (annual_run_rate // 50_000_000),       # Electrical Engineer
+                6: 0,     # Production Supervisor - OUTSOURCED
+                7: 0,     # Assembler Senior - OUTSOURCED
+                8: 0,     # Assembler Junior - OUTSOURCED
+                9: max(0, units_in_field // 2000),            # Quality Technician (field issues)
+                10: 1 + (annual_run_rate // 100_000_000),     # Supply Chain Manager
+                11: 1,    # Finance Manager - always 1
+                12: 1 + (annual_run_rate // 30_000_000),      # Sales Manager (dealer relations)
+                13: max(0, units_in_field // 1500),           # Field Service Tech
+            }
+            
+            for role_id, headcount in headcount_by_role.items():
+                if headcount > 0:
                     conn.execute(text(
                         "INSERT INTO opex_staffing_plan (role_id, month_date, headcount) VALUES (:rid, :dt, :hc)"
-                    ), {"rid": role_id, "dt": month_str, "hc": round(actual_hc, 1)})
+                    ), {"rid": role_id, "dt": month_str, "hc": round(headcount, 1)})
         
-        # --- Production Units (200 units, spread across workdays) ---
-        for i in range(200):
-            build_date = date(2026, 1, 6) + timedelta(days=i // 4)
-            # Skip weekends
-            while build_date.weekday() >= 5:
-                build_date += timedelta(days=1)
-            # 25% direct, 75% dealer
-            channel = 'DIRECT' if i % 4 == 0 else 'DEALER'
-            conn.execute(text(
-                "INSERT INTO production_unit (serial_number, build_date, sales_channel, status) VALUES (:sn, :bd, :ch, 'PLANNED')"
-            ), {"sn": f"IDX-{i+1:04d}", "bd": str(build_date), "ch": channel})
+        # --- Production Units - Actual IdleX 3-Year Production Plan ---
+        # Monthly targets derived from weekly production schedule
+        # Units distributed across workdays (Mon-Fri) with 25% direct / 75% dealer split
+        
+        monthly_production_plan = [
+            # 2026 - Ramp Year
+            ("2026-01-01", 30),    # Jan 2026 - Production start
+            ("2026-02-01", 40),    # Feb 2026
+            ("2026-03-01", 55),    # Mar 2026
+            ("2026-04-01", 62),    # Apr 2026
+            ("2026-05-01", 80),    # May 2026
+            ("2026-06-01", 127),   # Jun 2026
+            ("2026-07-01", 119),   # Jul 2026
+            ("2026-08-01", 202),   # Aug 2026
+            ("2026-09-01", 254),   # Sep 2026
+            ("2026-10-01", 292),   # Oct 2026
+            ("2026-11-01", 453),   # Nov 2026
+            ("2026-12-01", 473),   # Dec 2026 (Year 1 Total: 2,187)
+            
+            # 2027 - Growth Year
+            ("2027-01-01", 532),   # Jan 2027
+            ("2027-02-01", 588),   # Feb 2027
+            ("2027-03-01", 797),   # Mar 2027
+            ("2027-04-01", 712),   # Apr 2027
+            ("2027-05-01", 987),   # May 2027
+            ("2027-06-01", 875),   # Jun 2027
+            ("2027-07-01", 956),   # Jul 2027
+            ("2027-08-01", 1317),  # Aug 2027
+            ("2027-09-01", 1152),  # Sep 2027
+            ("2027-10-01", 1241),  # Oct 2027
+            ("2027-11-01", 1685),  # Nov 2027
+            ("2027-12-01", 1480),  # Dec 2027 (Year 2 Total: 11,322)
+            
+            # 2028 - Scale Year
+            ("2028-01-01", 2096),  # Jan 2028
+            ("2028-02-01", 1780),  # Feb 2028
+            ("2028-03-01", 1878),  # Mar 2028
+            ("2028-04-01", 2008),  # Apr 2028
+            ("2028-05-01", 2616),  # May 2028
+            ("2028-06-01", 2280),  # Jun 2028
+            ("2028-07-01", 3049),  # Jul 2028
+            ("2028-08-01", 2622),  # Aug 2028
+            ("2028-09-01", 2812),  # Sep 2028
+            ("2028-10-01", 3753),  # Oct 2028
+            ("2028-11-01", 3217),  # Nov 2028
+            ("2028-12-01", 3240),  # Dec 2028 (Year 3 Total: 31,351)
+        ]
+        # Grand Total: 44,860 units over 36 months
+        
+        import calendar
+        
+        def get_workdays_for_month(year, month):
+            """Get list of workdays (Mon-Fri) in a month."""
+            num_days = calendar.monthrange(year, month)[1]
+            workdays = []
+            for day in range(1, num_days + 1):
+                dt = date(year, month, day)
+                if dt.weekday() < 5:  # Monday = 0, Friday = 4
+                    workdays.append(dt)
+            return workdays
+        
+        serial_num = 1
+        
+        for month_str, target_units in monthly_production_plan:
+            if target_units == 0:
+                continue
+            
+            # Parse month
+            year = int(month_str[:4])
+            month = int(month_str[5:7])
+            
+            # Get workdays for this month
+            workdays = get_workdays_for_month(year, month)
+            if not workdays:
+                continue
+            
+            # Calculate units per day (distribute evenly)
+            units_per_day = target_units / len(workdays)
+            
+            # Track remaining units for rounding
+            remaining = target_units
+            day_idx = 0
+            
+            # Calculate direct vs dealer split (25% direct)
+            direct_count = int(target_units * 0.25)
+            dealer_count = target_units - direct_count
+            
+            # Create channel assignments
+            channels = ['DIRECT'] * direct_count + ['DEALER'] * dealer_count
+            
+            # Distribute units across workdays
+            for i, channel in enumerate(channels):
+                build_date = workdays[i % len(workdays)]
+                
+                conn.execute(text("""
+                    INSERT INTO production_unit (serial_number, build_date, sales_channel, status)
+                    VALUES (:sn, :bd, :ch, 'PLANNED')
+                """), {
+                    "sn": f"IDX-{serial_num:05d}",
+                    "bd": str(build_date),
+                    "ch": channel
+                })
+                serial_num += 1
+        
+        logger.info(f"Created {serial_num - 1:,} production units")
         
         # --- Work Centers ---
         work_centers = [
@@ -644,10 +776,13 @@ def run_seed():
                 "INSERT INTO inventory_balance (part_id, as_of_date, quantity_on_hand, quantity_reserved) VALUES (:p, '2026-01-01', :qty, 0)"
             ), {"p": part_id, "qty": initial_qty})
         
-        # --- Fleet Assignments (first 50 units) ---
-        for i in range(1, 51):
+        # --- Fleet Assignments (first 500 units as sample deployments) ---
+        # In reality, this would grow as units ship
+        for i in range(1, 501):
             fleet_id = (i % 5) + 1
-            in_service = str(date(2026, 1, 1) + timedelta(days=i * 2))
+            # Stagger in-service dates across first few months
+            days_offset = (i - 1) * 2
+            in_service = str(date(2026, 1, 15) + timedelta(days=days_offset))
             price = 8500 if i % 4 == 0 else 6375
             conn.execute(text(
                 "INSERT INTO unit_fleet_assignment (production_unit_id, fleet_id, in_service_date, purchase_price) VALUES (:u, :f, :d, :p)"
@@ -666,13 +801,101 @@ def run_seed():
                 VALUES (:u, :d, :mode, :part, :cost, :in_warr, :replaced)
             """), {"u": e[0], "d": e[1], "mode": e[2], "part": e[3], "cost": e[4], "in_warr": e[5], "replaced": e[6]})
         
-        # --- Service Subscriptions (first 30 units) ---
-        for i in range(1, 31):
+        # --- Service Subscriptions (first 300 units as sample) ---
+        for i in range(1, 301):
             plan_id = (i % 3) + 1
             fleet_id = (i % 5) + 1
             conn.execute(text(
                 "INSERT INTO unit_service_subscription (production_unit_id, service_plan_id, fleet_id, start_date, status) VALUES (:u, :p, :f, '2026-02-01', 'ACTIVE')"
             ), {"u": i, "p": plan_id, "f": fleet_id})
+        
+        # --- General Expenses (R&D and SG&A) - Actual IdleX Budget ---
+        # These expenses are based on the 2026 operating budget
+        # R&D front-loaded for product development, SG&A scales with revenue
+        
+        general_expenses = []
+        
+        # === R&D MATERIALS AND OUTSOURCING (2026) ===
+        # Core system development
+        general_expenses.extend([
+            ("R&D - Core System", "R&D", "2026-01-01", 50000),
+            ("R&D - Core System", "R&D", "2026-02-01", 40000),
+            ("R&D - Core System", "R&D", "2026-03-01", 30000),
+            ("R&D - Core System", "R&D", "2026-04-01", 5000),
+            ("R&D - Core System", "R&D", "2026-05-01", 5000),
+            ("R&D - Core System", "R&D", "2026-06-01", 5000),
+            ("R&D - Core System", "R&D", "2026-07-01", 5000),
+        ])
+        
+        # HVAC prototype and validation
+        general_expenses.extend([
+            ("R&D - HVAC Prototype", "R&D", "2026-01-01", 50000),
+            ("R&D - HVAC Prototype", "R&D", "2026-02-01", 25000),
+            ("R&D - HVAC Prototype", "R&D", "2026-03-01", 10000),
+            ("R&D - HVAC Prototype", "R&D", "2026-04-01", 5000),
+            ("R&D - HVAC Prototype", "R&D", "2026-05-01", 5000),
+            ("R&D - HVAC Prototype", "R&D", "2026-06-01", 5000),
+            ("R&D - HVAC Prototype", "R&D", "2026-07-01", 5000),
+        ])
+        
+        # Enclosures & Harnesses (Feb-Jul)
+        for m in range(2, 8):
+            general_expenses.append(("R&D - Enclosures & Harnesses", "R&D", f"2026-{m:02d}-01", 5000))
+        
+        # Software & Controls (Feb-Jul)
+        for m in range(2, 8):
+            general_expenses.append(("R&D - Software & Controls", "R&D", f"2026-{m:02d}-01", 5000))
+        
+        # Test equipment and lab gear (Feb-Jul)
+        for m in range(2, 8):
+            general_expenses.append(("R&D - Test Equipment", "R&D", f"2026-{m:02d}-01", 5000))
+        
+        # Outsourced engineering (Feb-Jul)
+        for m in range(2, 8):
+            general_expenses.append(("R&D - Outsourced Engineering", "R&D", f"2026-{m:02d}-01", 5000))
+        
+        # Thermal and certification testing (Apr-Aug)
+        for m in range(4, 9):
+            general_expenses.append(("R&D - Certification Testing", "R&D", f"2026-{m:02d}-01", 5000))
+        
+        # === SG&A (All 36 months, scales with revenue) ===
+        # Revenue scaling factors by year
+        sga_scale = {2026: 1.0, 2027: 1.5, 2028: 2.5}
+        
+        for year in [2026, 2027, 2028]:
+            scale = sga_scale[year]
+            
+            for month in range(1, 13):
+                month_str = f"{year}-{month:02d}-01"
+                
+                # Office, cloud tools, insurance - $10K/mo base, scales with company
+                general_expenses.append(("Office & Cloud Tools", "SG&A", month_str, int(10000 * scale)))
+                
+                # Marketing - $15K/mo base, scales with revenue
+                general_expenses.append(("Marketing", "SG&A", month_str, int(15000 * scale)))
+                
+                # Travel - $10K/mo base, scales with sales activity
+                general_expenses.append(("Travel", "SG&A", month_str, int(10000 * scale)))
+                
+                # Legal and accounting - front-loaded in Jan/Feb, then steady
+                if year == 2026:
+                    if month == 1:
+                        legal_amt = 10000
+                    elif month == 2:
+                        legal_amt = 5000
+                    else:
+                        legal_amt = 1500
+                else:
+                    legal_amt = int(2500 * scale)  # Scales in later years
+                
+                general_expenses.append(("Legal & Accounting", "SG&A", month_str, legal_amt))
+        
+        # Insert all general expenses
+        for category, exp_type, month_date, amount in general_expenses:
+            conn.execute(text("""
+                INSERT INTO opex_general_expenses (category, expense_type, month_date, amount)
+                VALUES (:cat, :type, :dt, :amt)
+            """), {"cat": category, "type": exp_type, "dt": month_date, "amt": amount})
         
         conn.commit()
         logger.info("✅ IdleX ERP database initialized successfully")

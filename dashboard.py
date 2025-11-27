@@ -617,8 +617,11 @@ def generate_financial_ledgers(engine):
                     })
         
         # ---------------------------------------------------------------------
-        # PAYROLL (Monthly)
+        # PAYROLL (Monthly) - Outsourced Manufacturing Model
         # ---------------------------------------------------------------------
+        # Note: No direct labor (assemblers) - manufacturing is outsourced
+        # All internal staff are G&A/OpEx, not COGS
+        
         merged_payroll = pd.merge(
             df_staffing, 
             df_roles, 
@@ -635,14 +638,15 @@ def generate_financial_ledgers(engine):
             
             pay_date = row['month_date']
             
-            # Determine if this is direct labor (COGS) or overhead (OpEx)
-            is_direct_labor = 'Assembler' in row['role_name'] or 'Production' in row['role_name']
+            # In outsourced model, all internal staff are overhead (OpEx)
+            # No assemblers = no direct labor COGS
+            # Field service and QA are also OpEx (support costs)
             
-            # P&L Entry
+            # P&L Entry - All payroll is OpEx in outsourced model
             pnl_entries.append({
                 "Date": pay_date,
-                "Category": "Direct Labor" if is_direct_labor else "Salaries & Benefits",
-                "Type": "COGS" if is_direct_labor else "OpEx",
+                "Category": "Salaries & Benefits",
+                "Type": "OpEx",
                 "Amount": -monthly_cost
             })
             
@@ -926,7 +930,7 @@ def view_dashboard(engine, df_pnl, df_cash):
     - RIGHT: Results (KPIs, Charts, Alerts)
     """
     render_header()
-    st.markdown("### Executive Dashboard & Negotiation Console")
+    st.markdown("### Executive Dashboard")
     
     col_input, col_output = st.columns([1, 3])
     
@@ -1221,12 +1225,18 @@ def view_financials(engine, df_pnl, df_cash):
     stmt.loc['Revenue'] = ""
     stmt.loc['Product Sales'] = safe_sum([('Revenue', 'Sales Revenue')])
     
-    # COGS section
+    # COGS section - Outsourced manufacturing means only materials
     stmt.loc['Cost of Goods Sold'] = ""
     stmt.loc['Materials'] = safe_sum([('COGS', 'Raw Materials')])
-    stmt.loc['Direct Labor'] = safe_sum([('COGS', 'Direct Labor')])
     
-    total_cogs = stmt.loc['Materials'] + stmt.loc['Direct Labor']
+    # Check if there's any direct labor (for backward compatibility)
+    direct_labor = safe_sum([('COGS', 'Direct Labor')])
+    if direct_labor.abs().sum() > 0:
+        stmt.loc['Direct Labor'] = direct_labor
+        total_cogs = stmt.loc['Materials'] + stmt.loc['Direct Labor']
+    else:
+        total_cogs = stmt.loc['Materials']
+    
     stmt.loc['Gross Profit'] = stmt.loc['Product Sales'] + total_cogs  # COGS is negative
     
     # OpEx section
