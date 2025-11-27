@@ -946,7 +946,7 @@ def render_financial_statement(df: pd.DataFrame, title: str):
 
 def view_dashboard(engine, df_pnl, df_cash):
     """
-    Executive Dashboard & Negotiation Console
+    Executive Dashboard
     
     Split layout:
     - LEFT: Scenario inputs (Equity, Credit, Growth)
@@ -1968,7 +1968,7 @@ def view_opex(engine):
                 use_container_width=True
             )
             
-            if st.button("💾 Update Salaries", key="save_salaries"):
+            if st.button("💾 Save Roles & Salaries", type="primary", key="save_salaries"):
                 try:
                     with engine.connect() as conn:
                         for _, row in edited_roles.iterrows():
@@ -1983,7 +1983,7 @@ def view_opex(engine):
                                 "id": row['id']
                             })
                         conn.commit()
-                    st.success("Salaries updated!")
+                    st.success("Roles and salaries updated!")
                     st.rerun()
                 except Exception as e:
                     st.error(f"Update failed: {e}")
@@ -2056,30 +2056,44 @@ def view_supply_chain(engine):
     st.markdown("### Bill of Materials & Supply Chain")
     
     try:
-        df_parts = pd.read_sql("SELECT * FROM part_master ORDER BY id", engine)
+        # Join part_master with bom_items to get quantities
+        df_parts = pd.read_sql("""
+            SELECT p.*, COALESCE(b.qty_per_unit, 1) as qty_per_unit
+            FROM part_master p
+            LEFT JOIN bom_items b ON p.id = b.part_id
+            ORDER BY p.id
+        """, engine)
         
         if df_parts.empty:
             st.info("No parts defined in BOM.")
             return
         
-        st.markdown(f"<h4 style='font-family:Montserrat;color:{NAVY};'>Component Master</h4>", unsafe_allow_html=True)
+        # Calculate extended cost
+        df_parts['extended_cost'] = df_parts['cost'] * df_parts['qty_per_unit']
+        
+        st.markdown(f"<h4 style='font-family:Montserrat;color:{NAVY};'>Bill of Materials</h4>", unsafe_allow_html=True)
         
         edited_parts = st.data_editor(
             df_parts,
             column_config={
                 "id": st.column_config.NumberColumn("ID", disabled=True, width=50),
-                "sku": st.column_config.TextColumn("SKU", disabled=True, width=100),
-                "name": st.column_config.TextColumn("Component Name", width=180),
+                "sku": st.column_config.TextColumn("SKU", disabled=True, width=110),
+                "name": st.column_config.TextColumn("Component Name", width=200),
+                "qty_per_unit": st.column_config.NumberColumn("Qty/Unit", width=80),
                 "cost": st.column_config.NumberColumn("Unit Cost", format="$%.2f", width=90),
-                "moq": st.column_config.NumberColumn("MOQ", width=70),
-                "lead_time": st.column_config.NumberColumn("Lead Time (days)", width=100),
+                "extended_cost": st.column_config.NumberColumn("Extended", format="$%.2f", disabled=True, width=90),
+                "moq": st.column_config.NumberColumn("MOQ", width=60),
+                "lead_time": st.column_config.NumberColumn("Lead Days", width=80),
                 "deposit_pct": st.column_config.NumberColumn("Deposit %", format="%.0f%%", width=80),
-                "deposit_days": st.column_config.NumberColumn("Deposit Days", width=90),
-                "balance_days": st.column_config.NumberColumn("Balance Days", width=90),
+                "deposit_days": st.column_config.NumberColumn("Dep Days", width=75),
+                "balance_days": st.column_config.NumberColumn("Bal Days", width=75),
                 "supplier_name": st.column_config.TextColumn("Supplier", width=120),
+                "reorder_point": None,  # Hide
+                "safety_stock": None,   # Hide
             },
             hide_index=True,
-            use_container_width=True
+            use_container_width=True,
+            height=500
         )
         
         col1, col2 = st.columns([1, 4])
@@ -2089,6 +2103,7 @@ def view_supply_chain(engine):
                 try:
                     with engine.connect() as conn:
                         for _, row in edited_parts.iterrows():
+                            # Update part_master
                             conn.execute(text("""
                                 UPDATE part_master
                                 SET name = :name, cost = :cost, moq = :moq,
@@ -2107,26 +2122,67 @@ def view_supply_chain(engine):
                                 "supplier": row['supplier_name'],
                                 "id": row['id']
                             })
+                            
+                            # Update bom_items qty_per_unit
+                            conn.execute(text("""
+                                UPDATE bom_items
+                                SET qty_per_unit = :qty
+                                WHERE part_id = :part_id
+                            """), {
+                                "qty": row['qty_per_unit'],
+                                "part_id": row['id']
+                            })
                         conn.commit()
                     st.success("BOM saved!")
                     st.rerun()
                 except Exception as e:
                     st.error(f"Save failed: {e}")
         
-        # Cost summary
+        # Cost summary - with correct extended totals
         st.markdown("---")
         st.markdown(f"<h4 style='font-family:Montserrat;color:{NAVY};'>Unit Cost Summary</h4>", unsafe_allow_html=True)
         
-        total_cost = df_parts['cost'].sum()
+        # Recalculate extended costs after any edits
+        edited_parts['extended_cost'] = edited_parts['cost'] * edited_parts['qty_per_unit']
+        total_unit_cost = edited_parts['extended_cost'].sum()
         
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
-            render_metric_card("Total Material Cost", f"${total_cost:,.0f}", "neutral")
+            render_metric_card("Total Unit Cost", f"${total_unit_cost:,.2f}", "neutral")
         with col2:
             render_metric_card("Component Count", str(len(df_parts)), "neutral")
         with col3:
             avg_lead = df_parts['lead_time'].mean()
             render_metric_card("Avg Lead Time", f"{avg_lead:.0f} days", "neutral")
+        with col4:
+            max_lead = df_parts['lead_time'].max()
+            render_metric_card("Critical Path", f"{max_lead:.0f} days", "negative" if max_lead > 60 else "neutral")
+        
+        # Supplier breakdown
+        st.markdown("---")
+        st.markdown(f"<h4 style='font-family:Montserrat;color:{NAVY};'>Supplier Spend Analysis</h4>", unsafe_allow_html=True)
+        
+        supplier_spend = edited_parts.groupby('supplier_name').agg({
+            'extended_cost': 'sum',
+            'id': 'count',
+            'lead_time': 'max'
+        }).rename(columns={
+            'extended_cost': 'Total Spend/Unit',
+            'id': 'Parts',
+            'lead_time': 'Max Lead Time'
+        }).sort_values('Total Spend/Unit', ascending=False)
+        
+        supplier_spend['% of Unit Cost'] = (supplier_spend['Total Spend/Unit'] / total_unit_cost * 100)
+        
+        st.dataframe(
+            supplier_spend,
+            column_config={
+                "Total Spend/Unit": st.column_config.NumberColumn(format="$%.2f"),
+                "% of Unit Cost": st.column_config.NumberColumn(format="%.1f%%"),
+                "Max Lead Time": st.column_config.NumberColumn(format="%d days"),
+            },
+            use_container_width=True
+        )
     
     except Exception as e:
         st.error(f"Could not load BOM data: {e}")
