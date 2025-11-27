@@ -972,7 +972,6 @@ def view_dashboard(engine, df_pnl, df_cash):
             max_value=10_000_000,
             value=1_500_000,
             step=100_000,
-            format="%,d",
             help="Total cash from equity investment"
         )
         
@@ -982,7 +981,6 @@ def view_dashboard(engine, df_pnl, df_cash):
             max_value=10_000_000,
             value=4_100_000,
             step=100_000,
-            format="%,d",
             help="Maximum line of credit available"
         )
         
