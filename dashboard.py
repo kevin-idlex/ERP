@@ -495,8 +495,8 @@ def generate_financial_ledgers(engine):
        - Cash Out: Based on supplier payment terms
     
     CRITICAL ASSUMPTIONS:
-    - MSRP: $8,500
-    - Dealer Discount: 25% (pays $6,375)
+    - MSRP: $15,500 (2026), $13,500 (2027), $11,500 (2028)
+    - Dealer Pays: 80% of MSRP
     - Dealer Payment Terms: Net 30
     - Direct Sales: Cash on delivery
     """
@@ -546,8 +546,8 @@ def generate_financial_ledgers(engine):
                 unit_material_cost += qty * part['cost']
         
         # Default pricing constants (used if config missing)
-        DEFAULT_MSRP = 8500.0
-        DEFAULT_DEALER_DISCOUNT = 0.75
+        DEFAULT_MSRP = 15500.0
+        DEFAULT_DEALER_DISCOUNT = 0.80
         DEALER_PAYMENT_LAG = 30  # days
         
         pnl_entries = []
@@ -970,17 +970,19 @@ def view_dashboard(engine, df_pnl, df_cash):
             "Investor Equity ($)",
             min_value=0,
             max_value=10_000_000,
-            value=1_600_000,
+            value=1_500_000,
             step=100_000,
+            format="%,d",
             help="Total cash from equity investment"
         )
         
         loc_input = st.number_input(
             "Credit Limit (LOC) ($)",
             min_value=0,
-            max_value=5_000_000,
-            value=500_000,
-            step=50_000,
+            max_value=10_000_000,
+            value=4_100_000,
+            step=100_000,
+            format="%,d",
             help="Maximum line of credit available"
         )
         
@@ -1472,22 +1474,24 @@ def view_production(engine):
             # Calculate derived fields for display
             df_pricing['Dealer Price'] = df_pricing['msrp'] * df_pricing['dealer_discount_pct']
             df_pricing['Dealer Margin'] = (1 - df_pricing['dealer_discount_pct']) * 100
+            df_pricing['Dealer Pays Display'] = df_pricing['dealer_discount_pct'] * 100  # For display as percentage
             
             edited_pricing = st.data_editor(
                 df_pricing,
                 column_config={
                     "id": None,  # Hide ID
                     "year": st.column_config.NumberColumn("Year", disabled=True, width=80),
-                    "msrp": st.column_config.NumberColumn("MSRP ($)", format="$%.0f", width=100),
-                    "dealer_discount_pct": st.column_config.NumberColumn(
+                    "msrp": st.column_config.NumberColumn("MSRP ($)", format="$%,.0f", width=120),
+                    "dealer_discount_pct": None,  # Hide raw decimal
+                    "Dealer Pays Display": st.column_config.NumberColumn(
                         "Dealer Pays %", 
                         format="%.0f%%",
-                        min_value=0.5,
-                        max_value=1.0,
-                        help="Percentage of MSRP that dealer pays (e.g., 0.75 = 75%)",
+                        min_value=50,
+                        max_value=100,
+                        help="Percentage of MSRP that dealer pays (e.g., 80 = 80%)",
                         width=120
                     ),
-                    "Dealer Price": st.column_config.NumberColumn("Dealer Price", format="$%.0f", disabled=True, width=110),
+                    "Dealer Price": st.column_config.NumberColumn("Dealer Price", format="$%,.0f", disabled=True, width=120),
                     "Dealer Margin": st.column_config.NumberColumn("Dealer Margin %", format="%.0f%%", disabled=True, width=120),
                     "notes": st.column_config.TextColumn("Notes", width=200),
                 },
@@ -1499,6 +1503,8 @@ def view_production(engine):
                 try:
                     with engine.connect() as conn:
                         for _, row in edited_pricing.iterrows():
+                            # Convert display percentage (80) back to decimal (0.80)
+                            dealer_pct = row['Dealer Pays Display'] / 100.0
                             if row['id'] is not None:
                                 conn.execute(text("""
                                     UPDATE pricing_config 
@@ -1506,7 +1512,7 @@ def view_production(engine):
                                     WHERE id = :id
                                 """), {
                                     "msrp": row['msrp'],
-                                    "disc": row['dealer_discount_pct'],
+                                    "disc": dealer_pct,
                                     "notes": row['notes'] or '',
                                     "id": row['id']
                                 })
@@ -1517,7 +1523,7 @@ def view_production(engine):
                                 """), {
                                     "year": row['year'],
                                     "msrp": row['msrp'],
-                                    "disc": row['dealer_discount_pct'],
+                                    "disc": dealer_pct,
                                     "notes": row['notes'] or ''
                                 })
                         conn.commit()
@@ -1955,7 +1961,7 @@ def view_opex(engine):
                     "role_name": st.column_config.TextColumn("Role", width=200),
                     "annual_salary": st.column_config.NumberColumn(
                         "Annual Salary",
-                        format="$%.0f",
+                        format="$%,.0f",
                         width=120
                     ),
                     "department": st.column_config.SelectboxColumn(
@@ -2080,8 +2086,8 @@ def view_supply_chain(engine):
                 "sku": st.column_config.TextColumn("SKU", disabled=True, width=110),
                 "name": st.column_config.TextColumn("Component Name", width=200),
                 "qty_per_unit": st.column_config.NumberColumn("Qty/Unit", width=80),
-                "cost": st.column_config.NumberColumn("Unit Cost", format="$%.2f", width=90),
-                "extended_cost": st.column_config.NumberColumn("Extended", format="$%.2f", disabled=True, width=90),
+                "cost": st.column_config.NumberColumn("Unit Cost", format="$%,.2f", width=90),
+                "extended_cost": st.column_config.NumberColumn("Extended", format="$%,.2f", disabled=True, width=90),
                 "moq": st.column_config.NumberColumn("MOQ", width=60),
                 "lead_time": st.column_config.NumberColumn("Lead Days", width=80),
                 "deposit_pct": st.column_config.NumberColumn("Deposit %", format="%.0f%%", width=80),
@@ -2177,7 +2183,7 @@ def view_supply_chain(engine):
         st.dataframe(
             supplier_spend,
             column_config={
-                "Total Spend/Unit": st.column_config.NumberColumn(format="$%.2f"),
+                "Total Spend/Unit": st.column_config.NumberColumn(format="$%,.2f"),
                 "% of Unit Cost": st.column_config.NumberColumn(format="%.1f%%"),
                 "Max Lead Time": st.column_config.NumberColumn(format="%d days"),
             },

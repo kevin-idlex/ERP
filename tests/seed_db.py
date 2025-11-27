@@ -432,10 +432,10 @@ def run_seed():
         
         # --- Global Config ---
         configs = [
-            ("start_cash", "1500000", "Default starting cash balance"),
-            ("loc_limit", "4100000", "Default line of credit limit"),
-            ("msrp_price", "15500", "Unit MSRP price (2026)"),
-            ("dealer_discount", "0.80", "Dealer price as % of MSRP"),
+            ("start_cash", "1600000", "Default starting cash balance"),
+            ("loc_limit", "500000", "Default line of credit limit"),
+            ("msrp_price", "8500", "Unit MSRP price"),
+            ("dealer_discount", "0.75", "Dealer price as % of MSRP"),
             ("direct_sales_pct", "0.25", "Target % of direct sales"),
             ("company_name", "IdleX", "Company name for reports"),
         ]
@@ -457,12 +457,11 @@ def run_seed():
         bom_parts = [
             # === MAJOR COMPONENTS (Safiery / Long Lead) ===
             # SKU, Name, Unit Cost, MOQ, Lead Time, Deposit%, Deposit Days, Balance Days, ROP, SS, Supplier, Qty/Unit
-            # Safiery parts: 103 day lead time, 50% deposit, -45 balance days
             ("BAT-SS-48V", "Safiery Solid State 2C Lithium 48V", 715.26, 50, 103, 0.50, -103, -45, 150, 50, "Safiery", 3),
             ("DCDC-SCOTTY", "Scotty AI DC-DC (Slim Case)", 775.22, 10, 103, 0.50, -103, -45, 10, 5, "Safiery", 1),
-            ("SCRN-STARAI", "STAR AI Nexus GPS + eSIM Display", 230.00, 25, 103, 0.50, -103, -45, 25, 10, "Safiery", 1),
-            ("CBL-RS485", "RS485 Battery Interconnect Cables", 15.00, 100, 103, 0.50, -103, -45, 200, 50, "Safiery", 2),
-            ("CBL-VECAN", "VE.Can to NMEA2000 Micro-C Male", 27.00, 50, 103, 0.50, -103, -45, 50, 20, "Safiery", 1),
+            ("SCRN-STARAI", "STAR AI Nexus GPS + eSIM Display", 230.00, 25, 103, 0.00, 0, -45, 25, 10, "Safiery", 1),
+            ("CBL-RS485", "RS485 Battery Interconnect Cables", 15.00, 100, 75, 0.00, 0, -45, 200, 50, "Safiery", 2),
+            ("CBL-VECAN", "VE.Can to NMEA2000 Micro-C Male", 27.00, 50, 103, 0.00, 0, -45, 50, 20, "Safiery", 1),
             
             # === POWER COMPONENTS ===
             ("BPR-220400", "Battery Protect BPR000220400", 180.00, 25, 7, 0.00, 0, 0, 25, 10, "Victron", 1),
@@ -526,7 +525,7 @@ def run_seed():
         # --- Roles ---
         roles = [
             ("CEO", 250000, "Executive"),
-            ("CTO", 200000, "Engineering"),
+            ("VP Engineering", 200000, "Engineering"),
             ("VP Operations", 180000, "Operations"),
             ("Mechanical Engineer", 120000, "Engineering"),
             ("Electrical Engineer", 125000, "Engineering"),
@@ -938,11 +937,11 @@ def run_seed():
             """), {"cat": category, "type": exp_type, "dt": month_date, "amt": amount})
         
         # --- Pricing Configuration (by Year) ---
-        # MSRP decreases as scale increases, dealer pays 80% of MSRP
+        # MSRP and dealer discount can change over time as product matures
         pricing_by_year = [
-            (2026, 15500.00, 0.80, "Launch pricing - dealer pays 80% of MSRP"),
-            (2027, 13500.00, 0.80, "Scale pricing - volume discounts to market"),
-            (2028, 11500.00, 0.80, "Mature pricing - cost leadership"),
+            (2026, 8500.00, 0.75, "Launch pricing - 25% dealer margin"),
+            (2027, 8500.00, 0.75, "Maintain pricing through growth"),
+            (2028, 8750.00, 0.77, "Price increase with premium features"),
         ]
         
         for year, msrp, dealer_disc, notes in pricing_by_year:
