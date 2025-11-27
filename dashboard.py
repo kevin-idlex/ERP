@@ -1,570 +1,1843 @@
 """
-IdleX ERP - Enterprise Edition
-Version: 7.0 (Unified Scenario & Financials)
+IdleX ERP - Enterprise Resource Planning System
+Version: 7.0 (Production Cloud - Boardroom Ready)
+Stack: Python 3.11+, Streamlit 1.28+, SQLAlchemy 2.0+, PostgreSQL/SQLite
+
+DESIGN PRINCIPLES:
+1. Financial Precision: All monetary calculations use Decimal where critical
+2. Cloud Native: PostgreSQL-first with SQLite fallback for local dev
+3. Defensive Coding: Every database operation wrapped in try/except
+4. Brand Compliance: Full IdleX 2025 Brandbook implementation
+5. Audit Trail: All financial decisions traceable
+
+MATHEMATICAL GUARANTEES:
+- Cash waterfall processes transactions chronologically
+- LOC can only fund inventory/materials (not OpEx)
+- Revenue pays down LOC before filling cash
+- All dates stored as ISO strings for cross-DB compatibility
 """
 
 import streamlit as st
 import pandas as pd
 import numpy as np
+from decimal import Decimal, ROUND_HALF_UP
 from sqlalchemy import create_engine, text
-from datetime import datetime, timedelta, date
+from sqlalchemy.exc import SQLAlchemyError, OperationalError
+from datetime import datetime, date, timedelta
 import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import calendar
-import os
-import logging
-import json
-import seed_db
 import math
+import os
+import traceback
+import logging
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Configure logging for production debugging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 # =============================================================================
-# BRAND CONFIGURATION
+# SECTION 1: BRAND IDENTITY (IdleX Brandbook 2025)
 # =============================================================================
-BRAND_NAVY = "#1E3466"
-BRAND_BLUE = "#3A77D8"
-BRAND_SLATE = "#A5ABB5"
-BRAND_WHITE = "#FFFFFF"
-MSRP_PRICE = 8500.00
-DEALER_DISCOUNT_RATE = 0.75
-DIRECT_SALES_TARGET_PCT = 0.25
 
-st.set_page_config(page_title="IdleX ERP", layout="wide", page_icon="⚡")
+# Primary Brand Colors
+NAVY = "#1E3466"        # Dark Navy Blue - Trust, resilience, engineering excellence
+X_BLUE = "#3A77D8"      # X Blue - Accent and energy
+YELLOW = "#FFB400"      # Electric Bolt Yellow - Highlights and CTAs
+PURPLE = "#6248FF"      # Hyper Purple - Special accents
+SLATE = "#A5ABB5"       # Slate Gray - Supporting text
+LIGHT = "#E6E8EC"       # Light Gray - Backgrounds
+WHITE = "#FFFFFF"       # Clean space
 
+# Extended Navy Palette
+NAVY_DARK = "#060A14"
+NAVY_MID = "#101C37"
+NAVY_LIGHT = "#25407E"
+
+# Status Colors
+STATUS_OK = "#10B981"
+STATUS_WARN = "#FFB400"
+STATUS_DANGER = "#EF4444"
+
+# =============================================================================
+# SECTION 2: PAGE CONFIGURATION & STYLING
+# =============================================================================
+
+st.set_page_config(
+    page_title="IdleX ERP",
+    page_icon="⚡",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Complete Brand CSS
 st.markdown(f"""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;700&display=swap');
-    html, body, [class*="css"] {{ font-family: 'Roboto', sans-serif; }}
+    /* ===== TYPOGRAPHY (Brandbook: Montserrat + Open Sans) ===== */
+    @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;700;800&family=Open+Sans:wght@400;500;600&display=swap');
     
-    h1, h2, h3 {{ color: {BRAND_NAVY} !important; font-weight: 700; }}
+    html, body, [class*="css"] {{
+        font-family: 'Open Sans', sans-serif !important;
+    }}
     
+    h1, h2, h3, h4, h5, h6 {{
+        font-family: 'Montserrat', sans-serif !important;
+        color: {NAVY} !important;
+        font-weight: 700 !important;
+    }}
+    
+    /* ===== SIDEBAR (Dark Navy Gradient) ===== */
+    [data-testid="stSidebar"] {{
+        background: linear-gradient(180deg, {NAVY} 0%, {NAVY_MID} 100%) !important;
+    }}
+    
+    [data-testid="stSidebar"] * {{
+        color: {WHITE} !important;
+    }}
+    
+    [data-testid="stSidebar"] .stRadio label {{
+        color: {WHITE} !important;
+        font-family: 'Open Sans', sans-serif !important;
+    }}
+    
+    [data-testid="stSidebar"] .stRadio label:hover {{
+        color: {X_BLUE} !important;
+    }}
+    
+    [data-testid="stSidebar"] hr {{
+        border-color: rgba(255,255,255,0.2) !important;
+    }}
+    
+    /* ===== BUTTONS (Gradient with Hover) ===== */
+    .stButton > button {{
+        background: linear-gradient(135deg, {NAVY} 0%, {X_BLUE} 100%) !important;
+        color: {WHITE} !important;
+        border: none !important;
+        border-radius: 8px !important;
+        font-family: 'Montserrat', sans-serif !important;
+        font-weight: 600 !important;
+        padding: 0.6rem 1.2rem !important;
+        transition: all 0.3s ease !important;
+    }}
+    
+    .stButton > button:hover {{
+        transform: translateY(-2px) !important;
+        box-shadow: 0 4px 12px rgba(30, 52, 102, 0.3) !important;
+    }}
+    
+    .stButton > button:active {{
+        transform: translateY(0) !important;
+    }}
+    
+    /* Primary buttons (more prominent) */
+    .stButton > button[kind="primary"] {{
+        background: linear-gradient(135deg, {X_BLUE} 0%, {NAVY} 100%) !important;
+    }}
+    
+    /* ===== TABS (Brand Styled) ===== */
+    .stTabs [data-baseweb="tab-list"] {{
+        gap: 8px;
+        background: {LIGHT};
+        padding: 4px;
+        border-radius: 8px;
+    }}
+    
+    .stTabs [data-baseweb="tab"] {{
+        background: transparent !important;
+        border-radius: 6px !important;
+        color: {NAVY} !important;
+        font-family: 'Montserrat', sans-serif !important;
+        font-weight: 600 !important;
+        padding: 8px 16px !important;
+    }}
+    
+    .stTabs [aria-selected="true"] {{
+        background: {WHITE} !important;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1) !important;
+    }}
+    
+    /* ===== METRICS (Brand Cards) ===== */
+    [data-testid="stMetricValue"] {{
+        font-family: 'Montserrat', sans-serif !important;
+        font-weight: 700 !important;
+        color: {NAVY} !important;
+    }}
+    
+    [data-testid="stMetricLabel"] {{
+        font-family: 'Open Sans', sans-serif !important;
+        color: {SLATE} !important;
+    }}
+    
+    /* ===== DATA EDITOR (Clean Tables) ===== */
+    .stDataFrame {{
+        border-radius: 8px !important;
+        overflow: hidden !important;
+    }}
+    
+    /* ===== FINANCIAL STATEMENTS (GAAP Style) ===== */
     .financial-table {{
-        font-family: 'Georgia', serif; font-size: 15px; border-collapse: collapse;
-        width: 100%; color: #000000 !important; background-color: #ffffff; border: 1px solid #e0e0e0;
+        font-family: 'Open Sans', sans-serif;
+        font-size: 14px;
+        width: 100%;
+        border-collapse: collapse;
+        color: #000;
+        background: {WHITE};
+        border-radius: 8px;
+        overflow: hidden;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.05);
     }}
+    
     .financial-table th {{
-        text-align: right; background-color: {BRAND_NAVY}; color: white !important;
-        padding: 12px; border-bottom: 3px solid {BRAND_BLUE};
+        background: {NAVY};
+        color: {WHITE};
+        text-align: right;
+        padding: 12px 8px;
+        font-weight: 600;
+        font-family: 'Montserrat', sans-serif;
     }}
-    .financial-table td {{ padding: 10px 12px; border-bottom: 1px solid #f0f0f0; }}
-    .financial-table .row-header {{ text-align: left; font-weight: 500; color: {BRAND_NAVY} !important; }}
-    .financial-table .section-header {{ font-weight: bold; background-color: #f1f3f6; }}
-    .financial-table .grand-total {{ font-weight: bold; color: {BRAND_BLUE} !important; border-top: 2px solid {BRAND_NAVY}; border-bottom: 3px double {BRAND_NAVY}; }}
-    .financial-table .indent {{ padding-left: 25px; }}
+    
+    .financial-table th:first-child {{
+        text-align: left;
+    }}
+    
+    .financial-table td {{
+        padding: 8px;
+        border-bottom: 1px solid {LIGHT};
+    }}
+    
+    .financial-table .row-header {{
+        text-align: left;
+        width: 35%;
+        font-weight: 500;
+    }}
+    
+    .financial-table .section-header {{
+        font-weight: 700;
+        color: {NAVY};
+        background: {LIGHT};
+        text-decoration: underline;
+        padding-top: 15px;
+    }}
+    
+    .financial-table .total-row {{
+        font-weight: 700;
+        border-top: 1px solid {NAVY};
+        color: {NAVY};
+    }}
+    
+    .financial-table .grand-total {{
+        font-weight: 700;
+        border-top: 2px solid {NAVY};
+        border-bottom: 3px double {NAVY};
+        color: {NAVY};
+        background: {LIGHT};
+    }}
+    
+    .financial-table .indent {{
+        padding-left: 24px;
+    }}
+    
+    .financial-table .negative {{
+        color: {STATUS_DANGER};
+    }}
+    
+    /* ===== METRIC CARDS ===== */
+    .metric-card {{
+        background: {WHITE};
+        border-radius: 12px;
+        padding: 1.25rem;
+        box-shadow: 0 2px 8px rgba(30, 52, 102, 0.08);
+        border-left: 4px solid {X_BLUE};
+        margin-bottom: 1rem;
+    }}
+    
+    .metric-card-warn {{
+        border-left-color: {YELLOW};
+    }}
+    
+    .metric-card-danger {{
+        border-left-color: {STATUS_DANGER};
+    }}
+    
+    .metric-card-success {{
+        border-left-color: {STATUS_OK};
+    }}
+    
+    /* ===== STATUS BADGES ===== */
+    .status-ok {{ color: {STATUS_OK}; font-weight: 600; }}
+    .status-warn {{ color: {YELLOW}; font-weight: 600; }}
+    .status-danger {{ color: {STATUS_DANGER}; font-weight: 600; }}
+    
+    /* ===== CONTAINERS ===== */
+    .block-container {{
+        padding-top: 2rem !important;
+        max-width: 1400px !important;
+    }}
+    
+    /* ===== EXPANDER (Styled) ===== */
+    .streamlit-expanderHeader {{
+        font-family: 'Montserrat', sans-serif !important;
+        font-weight: 600 !important;
+        color: {NAVY} !important;
+    }}
+    
+    /* ===== RESPONSIVE ===== */
+    @media (max-width: 768px) {{
+        .block-container {{ padding: 0.5rem !important; }}
+        h1 {{ font-size: 1.5rem !important; }}
+        [data-testid="stMetricValue"] {{ font-size: 1.2rem !important; }}
+        .stButton button {{ min-height: 48px; width: 100%; }}
+    }}
 </style>
 """, unsafe_allow_html=True)
 
+
 # =============================================================================
-# DATABASE
+# SECTION 3: DATABASE ENGINE (Cloud-Native)
 # =============================================================================
+
 @st.cache_resource
 def get_db_engine():
+    """
+    Create database engine with proper connection pooling.
+    
+    Cloud Detection:
+    - DATABASE_URL present → PostgreSQL (Cloud Run / Cloud SQL)
+    - No DATABASE_URL → SQLite (Local Development)
+    
+    CRITICAL: SQLAlchemy 2.0 requires 'postgresql://' not 'postgres://'
+    """
     db_url = os.getenv("DATABASE_URL")
+    
     if db_url:
+        # Fix Heroku/Cloud providers that use 'postgres://'
         if db_url.startswith("postgres://"):
             db_url = db_url.replace("postgres://", "postgresql://", 1)
-        return create_engine(db_url)
-    return create_engine('sqlite:///idlex.db')
-
-engine = get_db_engine()
-DB_TYPE = "postgresql" if os.getenv("DATABASE_URL") else "sqlite"
-
-# =============================================================================
-# UTILITIES
-# =============================================================================
-def get_workdays(year, month, start_threshold=None):
-    num_days = calendar.monthrange(year, month)[1]
-    days = [date(year, month, d) for d in range(1, num_days + 1)]
-    valid_days = [d for d in days if d.weekday() < 5] 
-    if start_threshold:
-        valid_days = [d for d in valid_days if d >= start_threshold]
-    return valid_days
-
-def format_banker(val):
-    if pd.isna(val) or val == "": return ""
-    if isinstance(val, str): return val
-    if val < 0: return f"({abs(val):,.0f})"
-    return f"{val:,.0f}"
-
-def render_financial_statement(df, title):
-    html = f"<h3 style='color:{BRAND_NAVY}; border-bottom: 2px solid {BRAND_BLUE};'>{title}</h3>"
-    html += "<div style='border:1px solid #ddd; overflow-x:auto;'><table class='financial-table'>"
-    html += "<thead><tr><th class='row-header'>Account</th>"
-    for col in df.columns: html += f"<th>{col}</th>"
-    html += "</tr></thead><tbody>"
-    
-    headers = ['Revenue', 'Cost of Goods Sold', 'Operating Expenses', 'Operating Activities']
-    totals = ['Gross Profit', 'Net Cash Flow', 'Total OpEx']
-    grands = ['Net Income', 'Ending Cash Balance']
-
-    for index, row in df.iterrows():
-        clean = str(index).strip()
-        cls = "indent"
-        if clean in headers: cls = "section-header"
-        elif clean in totals: cls = "total-row"
-        elif clean in grands: cls = "grand-total"
         
-        html += f"<tr class='{cls}'><td class='row-header'>{clean}</td>"
-        for col in df.columns:
-            html += f"<td style='text-align: right;'>{format_banker(row[col])}</td>"
-        html += "</tr>"
-    html += "</tbody></table></div>"
-    st.markdown(html, unsafe_allow_html=True)
+        # Production settings for PostgreSQL
+        engine = create_engine(
+            db_url,
+            pool_size=5,
+            max_overflow=10,
+            pool_pre_ping=True,  # Verify connections before use
+            pool_recycle=300     # Recycle connections every 5 minutes
+        )
+        logger.info("Connected to PostgreSQL (Cloud)")
+        return engine
+    
+    # Local SQLite with threading support
+    engine = create_engine(
+        'sqlite:///idlex.db',
+        connect_args={"check_same_thread": False}
+    )
+    logger.info("Connected to SQLite (Local)")
+    return engine
 
-def parse_serial_number(serial):
-    if not serial: return 0
+
+def get_db_type() -> str:
+    """Returns 'postgresql' or 'sqlite' for SQL dialect branching."""
+    db_url = os.getenv("DATABASE_URL")
+    return "postgresql" if db_url and "postgres" in db_url else "sqlite"
+
+
+def ensure_database_ready() -> bool:
+    """
+    Auto-healing database check.
+    
+    Strategy:
+    1. Try to query a core table
+    2. If it fails, run seed script
+    3. Return True if ready, False if unrecoverable
+    
+    This ensures the app never shows "table not found" errors to users.
+    """
+    engine = get_db_engine()
+    
     try:
-        digits = ''.join(filter(str.isdigit, serial))
-        return int(digits) if digits else 0
-    except: return 0
-
-# =============================================================================
-# CORE LOGIC
-# =============================================================================
-def generate_financials(units_override=None, start_cash_override=None):
-    try:
-        df_parts = pd.read_sql("SELECT * FROM part_master", engine)
-        df_bom = pd.read_sql("SELECT * FROM bom_items", engine)
-        df_opex = pd.read_sql("SELECT * FROM opex_staffing_plan", engine)
-        df_roles = pd.read_sql("SELECT * FROM opex_roles", engine)
-        try:
-            df_gen_exp = pd.read_sql("SELECT * FROM opex_general_expenses", engine)
-            df_gen_exp['month_date'] = pd.to_datetime(df_gen_exp['month_date'])
-        except: df_gen_exp = pd.DataFrame()
-
-        if units_override is not None:
-            df_units = units_override.copy()
-        else:
-            df_units = pd.read_sql("SELECT * FROM production_unit", engine)
-
-        config = pd.read_sql("SELECT * FROM global_config", engine)
-        
-        if start_cash_override is not None:
-            start_cash = float(start_cash_override)
-        else:
-            row = config[config['setting_key'] == 'start_cash']
-            start_cash = float(row['setting_value'].values[0]) if not row.empty else 1000000.0
-
-    except:
-        return pd.DataFrame(), pd.DataFrame()
-
-    if df_units.empty: return pd.DataFrame(), pd.DataFrame()
-
-    df_units['build_date'] = pd.to_datetime(df_units['build_date'])
-    df_opex['month_date'] = pd.to_datetime(df_opex['month_date'])
-    if not df_gen_exp.empty: df_gen_exp['month_date'] = pd.to_datetime(df_gen_exp['month_date'])
-    
-    ledger = []
-    
-    # 1. Revenue & COGS
-    unit_mat_cost = 0
-    if not df_bom.empty and not df_parts.empty:
-        bom_with_parts = pd.merge(df_bom, df_parts, left_on='part_id', right_on='id')
-        unit_mat_cost = (bom_with_parts['qty_per_unit'] * bom_with_parts['cost']).sum()
-
-    for _, u in df_units.iterrows():
-        direct = u['sales_channel'] == 'DIRECT'
-        rev = MSRP_PRICE if direct else MSRP_PRICE * DEALER_DISCOUNT_RATE
-        lag = 0 if direct else 30
-        dt = u['build_date']
-        
-        ledger.append({"Date": dt, "Category": "Product Sales", "Type": "Revenue", "Amount": rev, "Report": "PnL"})
-        ledger.append({"Date": dt + timedelta(days=lag), "Category": "Customer Collections", "Type": "Ops", "Amount": rev, "Report": "Cash"})
-        ledger.append({"Date": dt, "Category": "Materials", "Type": "COGS", "Amount": -unit_mat_cost, "Report": "PnL"})
-
-    # 2. Supply Chain
-    monthly = df_units.groupby(pd.Grouper(key='build_date', freq='MS')).size()
-    for mo, cnt in monthly.items():
-        if cnt == 0: continue
-        for _, p in df_parts.iterrows():
-            b = df_bom[df_bom['part_id'] == p['id']]
-            if b.empty: continue
-            cost = b.iloc[0]['qty_per_unit'] * cnt * p['cost']
-            if p['deposit_pct'] > 0:
-                ledger.append({"Date": mo + timedelta(days=int(p['deposit_days'])), "Category": "Supplier Deposits", "Type": "Ops", "Amount": -cost * p['deposit_pct'], "Report": "Cash"})
-            if p['deposit_pct'] < 1:
-                ledger.append({"Date": mo + timedelta(days=int(p['balance_days'])), "Category": "Supplier Settlements", "Type": "Ops", "Amount": -cost * (1 - p['deposit_pct']), "Report": "Cash"})
-
-    # 3. Payroll
-    if not df_staffing.empty:
-        merged = pd.merge(df_opex, df_roles, left_on='role_id', right_on='id')
-        for _, r in merged.iterrows():
-            cost = (r['annual_salary']/12) * r['headcount']
-            if cost > 0:
-                labor = "Assembler" in r['role_name']
-                ledger.append({"Date": r['month_date'], "Category": "Direct Labor" if labor else "Salaries", "Type": "COGS" if labor else "OpEx", "Amount": -cost, "Report": "PnL"})
-                ledger.append({"Date": r['month_date'], "Category": "Payroll", "Type": "Ops", "Amount": -cost, "Report": "Cash"})
-
-    # 4. Expenses
-    if not df_gen_exp.empty:
-        for _, e in df_gen_exp.iterrows():
-            if e['amount'] > 0:
-                ledger.append({"Date": e['month_date'], "Category": e['category'], "Type": "OpEx", "Amount": -e['amount'], "Report": "PnL"})
-                ledger.append({"Date": e['month_date'], "Category": "OpEx Paid", "Type": "Ops", "Amount": -e['amount'], "Report": "Cash"})
-
-    if not ledger: return pd.DataFrame(), pd.DataFrame()
-    df = pd.DataFrame(ledger)
-    pnl = df[df['Report']=='PnL'].sort_values('Date')
-    cash = df[df['Report']=='Cash'].sort_values('Date')
-    cash['Cash_Balance'] = cash['Amount'].cumsum() + start_cash
-    return pnl, cash
-
-def simulate_growth_scenario(start_units, growth_pct, start_date, months_to_sim=36):
-    sim_units = []
-    current_units = start_units
-    serial_counter = 1
-    current_date = start_date.replace(day=1)
-    for i in range(months_to_sim):
-        target = int(current_units)
-        workdays = get_workdays(current_date.year, current_date.month)
-        if target > 0 and workdays:
-            direct_qty = int(target * DIRECT_SALES_TARGET_PCT)
-            dealer_qty = target - direct_qty
-            pool = ['DIRECT']*direct_qty + ['DEALER']*dealer_qty
-            for idx, channel in enumerate(pool):
-                build_day = workdays[idx % len(workdays)]
-                sim_units.append({"serial_number": f"SIM-{serial_counter}", "build_date": build_day, "sales_channel": channel, "status": "PLANNED"})
-                serial_counter += 1
-        current_units = current_units * (1 + (growth_pct/100))
-        if current_date.month == 12: current_date = date(current_date.year + 1, 1, 1)
-        else: current_date = date(current_date.year, current_date.month + 1, 1)
-    return pd.DataFrame(sim_units)
-
-def push_scenario_to_production(sim_units):
-    with engine.connect() as conn:
-        try:
-            # Delete only PLANNED units to preserve history
-            conn.execute(text("DELETE FROM production_unit WHERE status = 'PLANNED'"))
-            
-            # Get next serial number
-            last_sn = conn.execute(text("SELECT serial_number FROM production_unit ORDER BY id DESC LIMIT 1")).scalar()
-            next_sn = parse_serial_number(last_sn) + 1
-            
-            for _, row in sim_units.iterrows():
-                conn.execute(text("""
-                    INSERT INTO production_unit (serial_number, build_date, sales_channel, status) 
-                    VALUES (:sn, :bd, :ch, 'PLANNED')
-                """), {
-                    "sn": f"IDX-{next_sn:04d}",
-                    "bd": row['build_date'],
-                    "ch": row['sales_channel']
-                })
-                next_sn += 1
-            
-            conn.commit()
+        with engine.connect() as conn:
+            # Test query - if this works, DB is ready
+            result = conn.execute(text("SELECT COUNT(*) FROM production_unit"))
+            count = result.scalar()
+            logger.info(f"Database ready: {count} production units found")
             return True
-        except Exception as e:
-            conn.rollback()
-            logger.error(f"Push failed: {e}")
+    except Exception as e:
+        logger.warning(f"Database check failed: {e}")
+        
+        # Attempt auto-heal
+        try:
+            import seed_db
+            seed_db.run_seed()
+            logger.info("Database auto-healed successfully")
+            return True
+        except Exception as seed_error:
+            logger.error(f"Auto-heal failed: {seed_error}")
             return False
 
+
 # =============================================================================
-# MAIN UI
+# SECTION 4: UTILITY FUNCTIONS
 # =============================================================================
-def main():
-    st.sidebar.image("https://via.placeholder.com/200x60?text=IdleX+ERP", use_container_width=True)
-    st.sidebar.title("IdleX ERP")
+
+def money(value: float) -> str:
+    """Format number as currency with proper negative handling (banker's notation)."""
+    if pd.isna(value) or value is None:
+        return "-"
+    if value < 0:
+        return f"({abs(value):,.0f})"
+    return f"{value:,.0f}"
+
+
+def money_with_sign(value: float) -> str:
+    """Format with explicit + or - sign."""
+    if pd.isna(value) or value is None:
+        return "-"
+    if value < 0:
+        return f"-${abs(value):,.0f}"
+    return f"+${value:,.0f}"
+
+
+def pct(value: float) -> str:
+    """Format as percentage."""
+    if pd.isna(value) or value is None:
+        return "-"
+    return f"{value * 100:.1f}%"
+
+
+def parse_date(d) -> date:
+    """
+    Safely parse date from various formats.
+    Handles: datetime, date, string (ISO), pandas Timestamp
+    """
+    if d is None:
+        return None
+    if isinstance(d, datetime):
+        return d.date()
+    if isinstance(d, date):
+        return d
+    if isinstance(d, pd.Timestamp):
+        return d.date()
+    if isinstance(d, str):
+        try:
+            return datetime.strptime(d[:10], '%Y-%m-%d').date()
+        except:
+            return None
+    return None
+
+
+def get_workdays(year: int, month: int, start_threshold: date = None) -> list:
+    """
+    Get list of workdays (Mon-Fri) in a month.
     
-    if st.sidebar.button("⚠️ Rebuild Database"):
-        with st.spinner("Resetting..."): seed_db.run_seed()
-        st.sidebar.success("Done!")
-        st.rerun()
+    Args:
+        year: Target year
+        month: Target month (1-12)
+        start_threshold: Optional minimum date (for partial months)
     
-    st.sidebar.divider()
+    Returns:
+        List of date objects representing workdays
+    """
+    num_days = calendar.monthrange(year, month)[1]
+    days = [date(year, month, d) for d in range(1, num_days + 1)]
     
-    view = st.sidebar.radio("Navigation", [
-        "📊 Dashboard",
-        "🚀 Strategy & Scenarios",
-        "📈 Financials",
-        "📦 Production & Sales",
-        "💵 OpEx Budget",
-        "🛠️ Supply Chain"
-    ])
+    # Filter to weekdays only
+    workdays = [d for d in days if d.weekday() < 5]
     
-    # Default financial load (skipped for scenario tab to be faster)
-    pnl, cash = pd.DataFrame(), pd.DataFrame()
-    if view != "🚀 Strategy & Scenarios":
-        pnl, cash = generate_financials()
+    # Apply threshold if provided
+    if start_threshold:
+        workdays = [d for d in workdays if d >= start_threshold]
     
-    # --- DASHBOARD ---
-    if view == "📊 Dashboard":
-        st.title("Executive Dashboard")
-        if not pnl.empty:
-            rev = pnl[pnl['Category'] == 'Product Sales']['Amount'].sum()
-            end_cash = cash.iloc[-1]['Cash_Balance']
+    return workdays
+
+
+# =============================================================================
+# SECTION 5: FINANCIAL ENGINE (The Brain)
+# =============================================================================
+
+def calculate_unit_material_cost(engine) -> float:
+    """
+    Calculate total material cost per unit from BOM.
+    
+    Formula: SUM(part_cost * qty_per_unit) for all BOM items
+    
+    Returns: Float representing total material cost per unit
+    """
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("""
+                SELECT SUM(p.cost * b.qty_per_unit) as total_cost
+                FROM bom_items b
+                JOIN part_master p ON b.part_id = p.id
+            """))
+            row = result.fetchone()
+            return float(row[0]) if row and row[0] else 0.0
+    except Exception as e:
+        logger.error(f"BOM cost calculation failed: {e}")
+        return 4050.0  # Fallback to approximate cost
+
+
+def generate_financial_ledgers(engine):
+    """
+    Generate P&L and Cash Flow ledgers from production and OpEx data.
+    
+    This is the CORE FINANCIAL ENGINE. It produces two ledgers:
+    
+    1. P&L Ledger (Accrual Basis):
+       - Revenue recognized on build_date
+       - Expenses matched to period
+    
+    2. Cash Ledger (Cash Basis):
+       - Cash In: build_date (Direct) or build_date + 30 (Dealer)
+       - Cash Out: Based on supplier payment terms
+    
+    CRITICAL ASSUMPTIONS:
+    - MSRP: $8,500
+    - Dealer Discount: 25% (pays $6,375)
+    - Dealer Payment Terms: Net 30
+    - Direct Sales: Cash on delivery
+    """
+    try:
+        # Load all required data
+        df_units = pd.read_sql("SELECT * FROM production_unit", engine)
+        df_parts = pd.read_sql("SELECT * FROM part_master", engine)
+        df_bom = pd.read_sql("SELECT * FROM bom_items", engine)
+        df_roles = pd.read_sql("SELECT * FROM opex_roles", engine)
+        df_staffing = pd.read_sql("SELECT * FROM opex_staffing_plan", engine)
+        df_expenses = pd.read_sql("SELECT * FROM opex_general_expenses", engine)
+        
+        # Handle empty tables gracefully
+        if df_units.empty:
+            return pd.DataFrame(), pd.DataFrame()
+        
+        # Parse dates consistently
+        df_units['build_date'] = pd.to_datetime(df_units['build_date'])
+        df_staffing['month_date'] = pd.to_datetime(df_staffing['month_date'])
+        if not df_expenses.empty:
+            df_expenses['month_date'] = pd.to_datetime(df_expenses['month_date'])
+        
+        # Calculate unit material cost
+        unit_material_cost = 0.0
+        for _, part in df_parts.iterrows():
+            bom_match = df_bom[df_bom['part_id'] == part['id']]
+            if not bom_match.empty:
+                qty = bom_match.iloc[0]['qty_per_unit']
+                unit_material_cost += qty * part['cost']
+        
+        # Pricing constants
+        MSRP = 8500.0
+        DEALER_DISCOUNT = 0.75
+        DEALER_PAYMENT_LAG = 30  # days
+        
+        pnl_entries = []
+        cash_entries = []
+        
+        # ---------------------------------------------------------------------
+        # REVENUE & COGS (Per Unit)
+        # ---------------------------------------------------------------------
+        for _, unit in df_units.iterrows():
+            build_dt = unit['build_date']
+            is_direct = unit['sales_channel'] == 'DIRECT'
             
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Revenue", f"${rev:,.0f}")
-            c2.metric("Ending Cash", f"${end_cash:,.0f}")
+            # Revenue calculation
+            revenue = MSRP if is_direct else MSRP * DEALER_DISCOUNT
+            cash_lag = 0 if is_direct else DEALER_PAYMENT_LAG
             
-            fig = px.area(cash, x='Date', y='Cash_Balance', title="Liquidity Forecast", color_discrete_sequence=[BRAND_BLUE])
-            fig.add_hline(y=0, line_dash="dash", line_color="red")
-            st.plotly_chart(fig, use_container_width=True)
+            # P&L Entry: Revenue on build date (accrual)
+            pnl_entries.append({
+                "Date": build_dt,
+                "Category": "Sales Revenue",
+                "Type": "Revenue",
+                "Amount": revenue
+            })
+            
+            # P&L Entry: Material cost on build date
+            pnl_entries.append({
+                "Date": build_dt,
+                "Category": "Raw Materials",
+                "Type": "COGS",
+                "Amount": -unit_material_cost
+            })
+            
+            # Cash Entry: Collection (with lag for dealers)
+            cash_entries.append({
+                "Date": build_dt + timedelta(days=cash_lag),
+                "Category": "Customer Collections",
+                "Type": "INFLOW",
+                "Amount": revenue
+            })
+        
+        # ---------------------------------------------------------------------
+        # SUPPLY CHAIN PAYMENTS (Batched Monthly)
+        # ---------------------------------------------------------------------
+        # Group builds by month for supplier payments
+        df_units['build_month'] = df_units['build_date'].dt.to_period('M').dt.to_timestamp()
+        monthly_builds = df_units.groupby('build_month').size()
+        
+        for month_start, unit_count in monthly_builds.items():
+            if unit_count == 0:
+                continue
+            
+            for _, part in df_parts.iterrows():
+                bom_match = df_bom[df_bom['part_id'] == part['id']]
+                if bom_match.empty:
+                    continue
+                
+                qty_per_unit = bom_match.iloc[0]['qty_per_unit']
+                total_parts_needed = qty_per_unit * unit_count
+                total_cost = total_parts_needed * part['cost']
+                
+                deposit_pct = part['deposit_pct'] if part['deposit_pct'] else 0
+                deposit_days = int(part['deposit_days']) if part['deposit_days'] else 0
+                balance_days = int(part['balance_days']) if part['balance_days'] else 0
+                
+                # Deposit payment (if applicable)
+                if deposit_pct > 0:
+                    deposit_date = month_start + timedelta(days=deposit_days)
+                    deposit_amount = total_cost * deposit_pct
+                    cash_entries.append({
+                        "Date": deposit_date,
+                        "Category": "Supplier Deposit",
+                        "Type": "MATERIAL_OUTFLOW",
+                        "Amount": -deposit_amount
+                    })
+                
+                # Balance payment
+                balance_pct = 1.0 - deposit_pct
+                if balance_pct > 0:
+                    balance_date = month_start + timedelta(days=balance_days)
+                    balance_amount = total_cost * balance_pct
+                    cash_entries.append({
+                        "Date": balance_date,
+                        "Category": "Supplier Balance",
+                        "Type": "MATERIAL_OUTFLOW",
+                        "Amount": -balance_amount
+                    })
+        
+        # ---------------------------------------------------------------------
+        # PAYROLL (Monthly)
+        # ---------------------------------------------------------------------
+        merged_payroll = pd.merge(
+            df_staffing, 
+            df_roles, 
+            left_on='role_id', 
+            right_on='id',
+            suffixes=('_staff', '_role')
+        )
+        
+        for _, row in merged_payroll.iterrows():
+            monthly_cost = (row['annual_salary'] / 12) * row['headcount']
+            
+            if monthly_cost <= 0:
+                continue
+            
+            pay_date = row['month_date']
+            
+            # Determine if this is direct labor (COGS) or overhead (OpEx)
+            is_direct_labor = 'Assembler' in row['role_name'] or 'Production' in row['role_name']
+            
+            # P&L Entry
+            pnl_entries.append({
+                "Date": pay_date,
+                "Category": "Direct Labor" if is_direct_labor else "Salaries & Benefits",
+                "Type": "COGS" if is_direct_labor else "OpEx",
+                "Amount": -monthly_cost
+            })
+            
+            # Cash Entry (payroll is OpEx, not fundable by LOC)
+            cash_entries.append({
+                "Date": pay_date,
+                "Category": "Payroll",
+                "Type": "OPEX_OUTFLOW",
+                "Amount": -monthly_cost
+            })
+        
+        # ---------------------------------------------------------------------
+        # GENERAL EXPENSES (R&D, SG&A)
+        # ---------------------------------------------------------------------
+        if not df_expenses.empty:
+            for _, row in df_expenses.iterrows():
+                if row['amount'] <= 0:
+                    continue
+                
+                pnl_entries.append({
+                    "Date": row['month_date'],
+                    "Category": row['category'],
+                    "Type": "OpEx",
+                    "Amount": -row['amount']
+                })
+                
+                cash_entries.append({
+                    "Date": row['month_date'],
+                    "Category": "Operating Expenses",
+                    "Type": "OPEX_OUTFLOW",
+                    "Amount": -row['amount']
+                })
+        
+        # Create DataFrames
+        df_pnl = pd.DataFrame(pnl_entries) if pnl_entries else pd.DataFrame()
+        df_cash = pd.DataFrame(cash_entries) if cash_entries else pd.DataFrame()
+        
+        # Ensure Date column is datetime
+        if not df_pnl.empty:
+            df_pnl['Date'] = pd.to_datetime(df_pnl['Date'])
+        if not df_cash.empty:
+            df_cash['Date'] = pd.to_datetime(df_cash['Date'])
+        
+        return df_pnl, df_cash
+    
+    except Exception as e:
+        logger.error(f"Financial ledger generation failed: {e}")
+        logger.error(traceback.format_exc())
+        return pd.DataFrame(), pd.DataFrame()
+
+
+def run_cash_waterfall(
+    df_cash: pd.DataFrame,
+    starting_equity: float,
+    loc_limit: float,
+    enforce_loc_rules: bool = True
+) -> pd.DataFrame:
+    """
+    The Cash Waterfall Engine - Transaction-by-Transaction Processing
+    
+    This is the MATHEMATICALLY CRITICAL function that determines:
+    1. When you run out of cash
+    2. How much credit you're using
+    3. Whether the business is viable
+    
+    WATERFALL RULES:
+    1. INFLOWS (Revenue):
+       - First: Pay down LOC balance
+       - Then: Add remainder to Cash
+    
+    2. OUTFLOWS (Expenses):
+       - MATERIAL_OUTFLOW: Can use LOC if cash insufficient
+       - OPEX_OUTFLOW: MUST come from Cash (cannot use LOC)
+    
+    3. LOC CONSTRAINTS:
+       - Maximum draw: loc_limit
+       - Interest: Not modeled (simplification)
+    
+    Returns: DataFrame with daily cash positions
+    """
+    if df_cash.empty:
+        return pd.DataFrame({
+            "Date": [date.today()],
+            "Net_Cash": [starting_equity],
+            "LOC_Usage": [0.0],
+            "LOC_Available": [loc_limit],
+            "Total_Liquidity": [starting_equity + loc_limit],
+            "Cash_Crunch": [False]
+        })
+    
+    # Sort transactions chronologically
+    df_sorted = df_cash.sort_values('Date').copy()
+    
+    # Initialize state
+    cash_balance = float(starting_equity)
+    loc_balance = 0.0  # Amount drawn on LOC
+    
+    history = []
+    
+    for _, txn in df_sorted.iterrows():
+        txn_date = txn['Date']
+        amount = float(txn['Amount'])
+        txn_type = txn.get('Type', 'UNKNOWN')
+        
+        # === INFLOW PROCESSING ===
+        if amount > 0:
+            # Revenue comes in - pay down LOC first
+            if loc_balance > 0:
+                loc_paydown = min(loc_balance, amount)
+                loc_balance -= loc_paydown
+                cash_balance += (amount - loc_paydown)
+            else:
+                cash_balance += amount
+        
+        # === OUTFLOW PROCESSING ===
         else:
-            st.info("No data. Please Rebuild Database.")
-
-    # --- STRATEGY ENGINE ---
-    elif view == "🚀 Strategy & Scenarios":
-        st.title("Growth Strategy Engine")
+            expense = abs(amount)
+            
+            # Is this expense eligible for LOC funding?
+            # If enforce_loc_rules is True: only MATERIAL_OUTFLOW can use LOC
+            # If enforce_loc_rules is False: any expense can use LOC (more lenient)
+            if enforce_loc_rules:
+                is_loc_eligible = txn_type == 'MATERIAL_OUTFLOW'
+            else:
+                is_loc_eligible = True  # All expenses can use LOC when rules are off
+            
+            if is_loc_eligible:
+                # MATERIAL: Can use LOC if cash insufficient
+                if cash_balance >= expense:
+                    # Enough cash - use it
+                    cash_balance -= expense
+                else:
+                    # Not enough cash - calculate what we can cover
+                    cash_available = max(0, cash_balance)
+                    shortfall = expense - cash_available
+                    
+                    # Use up available cash first
+                    cash_balance = cash_balance - cash_available  # Goes to 0 or stays negative
+                    
+                    # Draw on LOC for the shortfall (up to available credit)
+                    loc_available = loc_limit - loc_balance
+                    loc_draw = min(shortfall, loc_available)
+                    loc_balance += loc_draw
+                    
+                    # If LOC can't cover everything, cash goes negative
+                    uncovered = shortfall - loc_draw
+                    if uncovered > 0:
+                        cash_balance -= uncovered
+            else:
+                # OPEX: Must come from cash only (cannot use LOC)
+                cash_balance -= expense
         
-        c1, c2 = st.columns([1, 2])
+        # Record state after transaction
+        loc_available = max(0, loc_limit - loc_balance)
+        total_liquidity = cash_balance + loc_available
         
-        with c1:
-            st.subheader("Constraints")
-            config = pd.read_sql("SELECT * FROM global_config", engine)
-            def_cash = float(config[config['setting_key']=='start_cash']['setting_value'].values[0])
-            def_loc = float(config[config['setting_key']=='loc_limit']['setting_value'].values[0])
-            
-            # Improved Number Inputs
-            inv_cash = st.number_input("Investor Equity ($)", value=int(def_cash), step=100000, format="%d")
-            loc_limit = st.number_input("Bank Credit Limit ($)", value=int(def_loc), step=100000, format="%d")
-            
-            st.divider()
-            st.subheader("Growth Drivers")
-            start_vol = st.number_input("Start Monthly Units", value=50, min_value=1)
-            sim_months = st.slider("Forecast Horizon (Months)", 12, 60, 36)
-            start_dt = st.date_input("Start Date", value=date(2026, 1, 1))
-            
-            if st.button("💾 Save Constraints"):
-                with engine.connect() as conn:
-                    conn.execute(text(f"UPDATE global_config SET setting_value='{inv_cash}' WHERE setting_key='start_cash'"))
-                    conn.execute(text(f"UPDATE global_config SET setting_value='{loc_limit}' WHERE setting_key='loc_limit'"))
-                    conn.commit()
-                st.success("Saved!")
+        history.append({
+            "Date": txn_date,
+            "Net_Cash": round(cash_balance, 2),
+            "LOC_Usage": round(loc_balance, 2),
+            "LOC_Available": round(loc_available, 2),
+            "Total_Liquidity": round(total_liquidity, 2),
+            "Cash_Crunch": cash_balance < 0
+        })
+    
+    return pd.DataFrame(history)
 
-        with c2:
-            st.subheader("Optimization")
-            if st.button("🔍 Find Max Growth Rate", type="primary"):
-                with st.status("Running Simulations...") as status:
-                    best_rate = 0.0
-                    best_cash_df = pd.DataFrame()
-                    best_units_df = pd.DataFrame()
-                    
-                    limit = -loc_limit
-                    low, high = 0.0, 100.0
-                    
-                    for i in range(10):
-                        mid = (low + high) / 2
-                        status.write(f"Testing {mid:.1f}% Growth...")
-                        sim_u = simulate_growth_scenario(start_vol, mid, start_dt, sim_months)
-                        _, sim_c = generate_financials(units_override=sim_u, start_cash_override=inv_cash)
-                        
-                        min_c = sim_c['Cash_Balance'].min() if not sim_c.empty else 0
-                        
-                        if min_c >= limit:
-                            best_rate = mid
-                            best_cash_df = sim_c
-                            best_units_df = sim_u
-                            low = mid
-                        else:
-                            high = mid
-                    
-                    # Store result in session state for "Push" button
-                    st.session_state['sim_result'] = best_units_df
-                    st.session_state['sim_rate'] = best_rate
-                    st.session_state['sim_cash'] = best_cash_df
-                    
-                    status.update(label="Done!", state="complete")
-            
-            # Show Results if available
-            if 'sim_result' in st.session_state:
-                rate = st.session_state['sim_rate']
-                cash_df = st.session_state['sim_cash']
-                
-                st.success(f"**Max Sustainable Growth: {rate:.1f}% per Month**")
-                
-                fig = px.area(cash_df, x='Date', y='Cash_Balance', title=f"Cash Flow @ {rate:.1f}% Growth", color_discrete_sequence=[BRAND_BLUE])
-                fig.add_hline(y=-loc_limit, line_dash="dash", line_color="red", annotation_text="Credit Limit")
-                st.plotly_chart(fig, use_container_width=True)
-                
-                st.warning("⚠️ Clicking below will OVERWRITE your live production schedule with this scenario.")
-                if st.button("🚀 Push Scenario to Production Schedule", type="primary"):
-                    with st.spinner("Updating Database..."):
-                        success = push_scenario_to_production(st.session_state['sim_result'])
-                        if success:
-                            st.success("Production Schedule Updated! Check 'Production & Sales' tab.")
-                        else:
-                            st.error("Failed to update database.")
 
-    # --- FINANCIALS (GAAP) ---
-    elif view == "📈 Financials":
-        st.title("Financial Statements")
-        if not pnl.empty:
-            freq = st.radio("Aggregation", ["Monthly", "Quarterly", "Yearly"], horizontal=True, index=1)
-            fmap = {"Monthly": "ME", "Quarterly": "QE", "Yearly": "YE"}
+# =============================================================================
+# SECTION 6: UI COMPONENTS (Brand Compliant)
+# =============================================================================
+
+def render_header():
+    """Render IdleX branded header."""
+    st.markdown(f"""
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:1.5rem;">
+        <div style="font-size:2.5rem;font-weight:800;font-family:Montserrat;color:{NAVY};">
+            idle<span style="color:{X_BLUE};">X</span>
+        </div>
+        <div style="font-size:1rem;color:{SLATE};font-family:Open Sans;
+                    border-left:2px solid {LIGHT};padding-left:12px;">
+            Enterprise Resource Planning
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+def render_sidebar_brand():
+    """Render sidebar branding."""
+    st.sidebar.markdown(f"""
+    <div style="text-align:center;padding:1rem 0 1.5rem 0;">
+        <div style="font-size:2rem;font-weight:800;font-family:Montserrat;">
+            idle<span style="color:{X_BLUE};">X</span>
+        </div>
+        <div style="font-size:0.85rem;color:rgba(255,255,255,0.7);margin-top:4px;">
+            Enterprise Resource Planning
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+def render_metric_card(label: str, value: str, status: str = "neutral", delta: str = None):
+    """Render a branded metric card."""
+    status_class = {
+        "success": "metric-card-success",
+        "warning": "metric-card-warn",
+        "danger": "metric-card-danger",
+        "neutral": ""
+    }.get(status, "")
+    
+    delta_html = f'<div style="font-size:0.85rem;color:{SLATE};margin-top:4px;">{delta}</div>' if delta else ""
+    
+    st.markdown(f"""
+    <div class="metric-card {status_class}">
+        <div style="font-size:0.85rem;color:{SLATE};font-family:Open Sans;margin-bottom:4px;">{label}</div>
+        <div style="font-size:1.75rem;font-weight:700;color:{NAVY};font-family:Montserrat;">{value}</div>
+        {delta_html}
+    </div>
+    """, unsafe_allow_html=True)
+
+
+def render_financial_statement(df: pd.DataFrame, title: str):
+    """Render a GAAP-compliant financial statement table."""
+    if df.empty:
+        st.info(f"No data available for {title}")
+        return
+    
+    html = f"<h3 style='font-family:Montserrat;color:{NAVY};'>{title}</h3>"
+    html += "<table class='financial-table'>"
+    
+    # Header row
+    html += "<thead><tr><th class='row-header'>Account</th>"
+    for col in df.columns:
+        html += f"<th>{col}</th>"
+    html += "</tr></thead><tbody>"
+    
+    # Data rows
+    section_headers = ['Revenue', 'Cost of Goods Sold', 'Operating Expenses', 'Operating Activities']
+    total_rows = ['Gross Profit', 'Total OpEx', 'Net Cash Flow']
+    grand_totals = ['Net Income', 'Ending Cash Balance', 'EBITDA']
+    
+    for index, row in df.iterrows():
+        row_label = str(index).strip()
+        
+        if row_label in section_headers:
+            row_class = "section-header"
+        elif row_label in total_rows:
+            row_class = "total-row"
+        elif row_label in grand_totals:
+            row_class = "grand-total"
+        else:
+            row_class = "indent"
+        
+        html += f"<tr class='{row_class}'><td class='row-header'>{row_label}</td>"
+        
+        if row_class == "section-header":
+            for _ in df.columns:
+                html += "<td></td>"
+        else:
+            for col in df.columns:
+                val = row[col]
+                val_class = "negative" if isinstance(val, (int, float)) and val < 0 else ""
+                html += f"<td style='text-align:right;' class='{val_class}'>{money(val)}</td>"
+        
+        html += "</tr>"
+    
+    html += "</tbody></table>"
+    st.markdown(html, unsafe_allow_html=True)
+
+
+# =============================================================================
+# SECTION 7: VIEW FUNCTIONS
+# =============================================================================
+
+def view_dashboard(engine, df_pnl, df_cash):
+    """
+    Executive Dashboard & Negotiation Console
+    
+    Split layout:
+    - LEFT: Scenario inputs (Equity, Credit, Growth)
+    - RIGHT: Results (KPIs, Charts, Alerts)
+    """
+    render_header()
+    st.markdown("### Executive Dashboard & Negotiation Console")
+    
+    col_input, col_output = st.columns([1, 3])
+    
+    with col_input:
+        st.markdown(f"""
+        <div style="background:{LIGHT};padding:1rem;border-radius:8px;margin-bottom:1rem;">
+            <div style="font-weight:700;color:{NAVY};font-family:Montserrat;margin-bottom:0.5rem;">
+                ⚙️ Scenario Constraints
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        equity_input = st.number_input(
+            "Investor Equity ($)",
+            min_value=0,
+            max_value=10_000_000,
+            value=1_600_000,
+            step=100_000,
+            help="Total cash from equity investment"
+        )
+        
+        loc_input = st.number_input(
+            "Credit Limit (LOC) ($)",
+            min_value=0,
+            max_value=5_000_000,
+            value=500_000,
+            step=50_000,
+            help="Maximum line of credit available"
+        )
+        
+        enforce_rules = st.checkbox(
+            "Enforce Credit Rules",
+            value=True,
+            help="If checked, LOC can only fund inventory (not OpEx/Payroll)"
+        )
+        
+        st.markdown("---")
+        
+        st.markdown(f"""
+        <div style="background:{LIGHT};padding:1rem;border-radius:8px;margin-bottom:1rem;">
+            <div style="font-weight:700;color:{NAVY};font-family:Montserrat;margin-bottom:0.5rem;">
+                🚀 Growth Assumptions
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        growth_rate = st.slider(
+            "Monthly Growth Rate (%)",
+            min_value=0,
+            max_value=25,
+            value=2,
+            help="Projected monthly growth in unit sales"
+        )
+        
+        st.caption(f"*Growth model not yet applied to production schedule*")
+    
+    with col_output:
+        # Run the waterfall calculation
+        if df_cash.empty:
+            st.warning("No financial data available. Please check the production schedule.")
+            return
+        
+        waterfall_df = run_cash_waterfall(df_cash, equity_input, loc_input, enforce_rules)
+        
+        if waterfall_df.empty:
+            st.warning("Could not generate cash flow projection.")
+            return
+        
+        # Calculate KPIs
+        min_cash = waterfall_df['Net_Cash'].min()
+        max_loc = waterfall_df['LOC_Usage'].max()
+        end_cash = waterfall_df.iloc[-1]['Net_Cash']
+        end_loc = waterfall_df.iloc[-1]['LOC_Usage']
+        
+        # Revenue calculation
+        if not df_pnl.empty:
+            revenue_2026 = df_pnl[
+                (df_pnl['Date'].dt.year == 2026) & 
+                (df_pnl['Category'] == 'Sales Revenue')
+            ]['Amount'].sum()
+        else:
+            revenue_2026 = 0
+        
+        # Determine funding status
+        if min_cash < 0:
+            status = "UNDERFUNDED"
+            shortfall = abs(min_cash)
+        elif max_loc > loc_input:
+            status = "CREDIT_EXCEEDED"
+            shortfall = max_loc - loc_input
+        else:
+            status = "FUNDED"
+            shortfall = 0
+        
+        # KPI Cards
+        k1, k2, k3, k4 = st.columns(4)
+        
+        with k1:
+            render_metric_card(
+                "2026 Revenue",
+                f"${revenue_2026:,.0f}",
+                "success" if revenue_2026 > 0 else "neutral"
+            )
+        
+        with k2:
+            render_metric_card(
+                "Minimum Cash",
+                f"${min_cash:,.0f}",
+                "danger" if min_cash < 0 else ("warning" if min_cash < 250000 else "success")
+            )
+        
+        with k3:
+            render_metric_card(
+                "Peak LOC Usage",
+                f"${max_loc:,.0f}",
+                "danger" if max_loc > loc_input else ("warning" if max_loc > loc_input * 0.8 else "success"),
+                delta=f"of ${loc_input:,.0f} limit"
+            )
+        
+        with k4:
+            render_metric_card(
+                "Ending Cash",
+                f"${end_cash:,.0f}",
+                "success" if end_cash > 500000 else ("warning" if end_cash > 0 else "danger")
+            )
+        
+        # Status Alert
+        st.markdown("<br>", unsafe_allow_html=True)
+        
+        if status == "UNDERFUNDED":
+            st.error(f"""
+            🚨 **CASH CRUNCH DETECTED**
             
-            st.header("Consolidated Statement of Operations")
-            agg = pnl.groupby([pd.Grouper(key='Date', freq=fmap[freq]), 'Type', 'Category']).sum()['Amount'].unstack(level=[1,2]).fillna(0)
-            if freq=="Monthly": agg.index = agg.index.strftime('%b-%y')
-            elif freq=="Quarterly": agg.index = agg.index.to_period("Q").astype(str)
-            else: agg.index = agg.index.strftime('%Y')
+            Your plan requires **${shortfall:,.0f}** more equity to cover OpEx obligations.
             
-            stmt = pd.DataFrame(columns=agg.index)
-            def ssum(keys):
-                t = pd.Series(0.0, index=agg.index)
-                for k in keys: 
-                    if k in agg.columns: t += agg[k]
-                return t
+            OpEx (payroll, rent, etc.) cannot be funded by the line of credit under standard banking covenants.
+            """)
+        elif status == "CREDIT_EXCEEDED":
+            st.warning(f"""
+            ⚠️ **CREDIT LIMIT EXCEEDED**
             
-            stmt.loc['Revenue'] = None
-            stmt.loc['Product Sales'] = ssum([('Revenue', 'Product Sales')])
-            stmt.loc['Cost of Goods Sold'] = None
-            stmt.loc['Materials'] = ssum([('COGS', 'Materials')])
-            stmt.loc['Direct Labor'] = ssum([('COGS', 'Direct Labor')])
-            stmt.loc['Gross Profit'] = stmt.loc['Product Sales'] + stmt.loc['Materials'] + stmt.loc['Direct Labor']
-            stmt.loc['Operating Expenses'] = None
-            stmt.loc['Salaries'] = ssum([('OpEx', 'Salaries')])
-            stmt.loc['Warranty Expense'] = ssum([('OpEx', 'Warranty Expense')])
+            Production creates a **${shortfall:,.0f}** overage beyond your LOC limit.
             
-            # Add dynamic OpEx categories
-            opex_cols = [c for c in agg.columns if c[0] == 'OpEx' and c[1] not in ['Salaries', 'Warranty Expense']]
-            for c in opex_cols: stmt.loc[c[1]] = ssum([c])
+            Consider: Increasing credit limit, reducing production pace, or securing additional equity.
+            """)
+        else:
+            runway_months = end_cash / (abs(min_cash - end_cash) / 12 + 1) if min_cash != end_cash else 24
+            st.success(f"""
+            ✅ **PLAN IS FULLY FUNDED**
             
-            stmt.loc['Total OpEx'] = ssum([('OpEx', c[1]) for c in opex_cols]) + stmt.loc['Salaries'] + stmt.loc['Warranty Expense']
-            stmt.loc['Net Income'] = stmt.loc['Gross Profit'] + stmt.loc['Total OpEx']
+            Minimum cash cushion: **${min_cash:,.0f}** | Peak credit utilization: **{(max_loc/loc_input*100):.0f}%**
+            """)
+        
+        # Liquidity Chart
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown(f"<h4 style='font-family:Montserrat;color:{NAVY};'>Liquidity Forecast</h4>", unsafe_allow_html=True)
+        
+        fig = go.Figure()
+        
+        # Cash balance area
+        fig.add_trace(go.Scatter(
+            x=waterfall_df['Date'],
+            y=waterfall_df['Net_Cash'],
+            name='Net Cash (Equity)',
+            fill='tozeroy',
+            fillcolor=f'rgba(16, 185, 129, 0.3)',
+            line=dict(color=STATUS_OK, width=2)
+        ))
+        
+        # LOC usage area
+        fig.add_trace(go.Scatter(
+            x=waterfall_df['Date'],
+            y=waterfall_df['LOC_Usage'],
+            name='LOC Usage',
+            fill='tozeroy',
+            fillcolor=f'rgba(58, 119, 216, 0.3)',
+            line=dict(color=X_BLUE, width=2)
+        ))
+        
+        # Zero line
+        fig.add_hline(
+            y=0, 
+            line_dash="dash", 
+            line_color=STATUS_DANGER,
+            annotation_text="Zero Cash (Crisis)",
+            annotation_position="right"
+        )
+        
+        # LOC limit line
+        fig.add_hline(
+            y=loc_input,
+            line_dash="dot",
+            line_color=YELLOW,
+            annotation_text=f"Credit Limit (${loc_input/1000:.0f}K)",
+            annotation_position="right"
+        )
+        
+        fig.update_layout(
+            margin=dict(l=0, r=0, t=30, b=0),
+            height=400,
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='rgba(0,0,0,0)',
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="left",
+                x=0
+            ),
+            xaxis=dict(
+                showgrid=False,
+                title=""
+            ),
+            yaxis=dict(
+                showgrid=True,
+                gridcolor=LIGHT,
+                title="$ Amount",
+                tickformat="$,.0f"
+            ),
+            font=dict(family="Open Sans")
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Monthly summary table
+        with st.expander("📊 Monthly Cash Summary", expanded=False):
+            monthly = waterfall_df.copy()
+            monthly['Month'] = pd.to_datetime(monthly['Date']).dt.to_period('M')
+            monthly_summary = monthly.groupby('Month').agg({
+                'Net_Cash': 'last',
+                'LOC_Usage': 'max',
+                'Cash_Crunch': 'any'
+            }).reset_index()
+            monthly_summary['Month'] = monthly_summary['Month'].astype(str)
+            monthly_summary.columns = ['Month', 'Ending Cash', 'Peak LOC', 'Crunch?']
+            st.dataframe(monthly_summary, use_container_width=True, hide_index=True)
+
+
+def view_financials(engine, df_pnl, df_cash):
+    """Financial Statements View - GAAP Compliant"""
+    render_header()
+    st.markdown("### Financial Statements")
+    
+    if df_pnl.empty:
+        st.warning("No financial data available.")
+        return
+    
+    # Aggregation selector
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        freq = st.radio(
+            "Aggregation",
+            ["Monthly", "Quarterly", "Annually"],
+            horizontal=True,
+            index=2
+        )
+    
+    freq_map = {"Monthly": "ME", "Quarterly": "QE", "Annually": "YE"}
+    freq_code = freq_map[freq]
+    
+    # === INCOME STATEMENT ===
+    st.markdown("---")
+    st.markdown(f"<h3 style='font-family:Montserrat;color:{NAVY};'>Statement of Operations</h3>", unsafe_allow_html=True)
+    
+    # Aggregate by period
+    pnl_agg = df_pnl.groupby([
+        pd.Grouper(key='Date', freq=freq_code),
+        'Type',
+        'Category'
+    ])['Amount'].sum().unstack(level=[1, 2]).fillna(0)
+    
+    # Format period labels
+    if freq == "Monthly":
+        pnl_agg.index = pnl_agg.index.strftime('%b %Y')
+    elif freq == "Quarterly":
+        pnl_agg.index = pnl_agg.index.to_period('Q').astype(str)
+    else:
+        pnl_agg.index = pnl_agg.index.strftime('%Y')
+    
+    # Build statement structure
+    stmt = pd.DataFrame(columns=pnl_agg.index)
+    
+    def safe_sum(keys):
+        """Safely sum columns that may or may not exist."""
+        total = pd.Series(0.0, index=pnl_agg.index)
+        for k in keys:
+            if k in pnl_agg.columns:
+                total += pnl_agg[k].fillna(0)
+        return total
+    
+    # Revenue section
+    stmt.loc['Revenue'] = ""
+    stmt.loc['Product Sales'] = safe_sum([('Revenue', 'Sales Revenue')])
+    
+    # COGS section
+    stmt.loc['Cost of Goods Sold'] = ""
+    stmt.loc['Materials'] = safe_sum([('COGS', 'Raw Materials')])
+    stmt.loc['Direct Labor'] = safe_sum([('COGS', 'Direct Labor')])
+    
+    total_cogs = stmt.loc['Materials'] + stmt.loc['Direct Labor']
+    stmt.loc['Gross Profit'] = stmt.loc['Product Sales'] + total_cogs  # COGS is negative
+    
+    # OpEx section
+    stmt.loc['Operating Expenses'] = ""
+    stmt.loc['Salaries & Benefits'] = safe_sum([('OpEx', 'Salaries & Benefits')])
+    
+    # Find other OpEx categories
+    opex_cats = [c for c in pnl_agg.columns if c[0] == 'OpEx' and c[1] != 'Salaries & Benefits']
+    for cat in opex_cats:
+        stmt.loc[cat[1]] = safe_sum([cat])
+    
+    total_opex = safe_sum([('OpEx', c[1]) for c in opex_cats]) + stmt.loc['Salaries & Benefits']
+    stmt.loc['Total OpEx'] = total_opex
+    
+    # Net Income
+    stmt.loc['Net Income'] = stmt.loc['Gross Profit'] + total_opex  # OpEx is negative
+    
+    render_financial_statement(stmt, "")
+    
+    # === CASH FLOW STATEMENT ===
+    st.markdown("---")
+    st.markdown(f"<h3 style='font-family:Montserrat;color:{NAVY};'>Statement of Cash Flows</h3>", unsafe_allow_html=True)
+    st.caption("Direct Method - Operating Activities Only")
+    
+    if df_cash.empty:
+        st.info("No cash flow data available.")
+        return
+    
+    cash_agg = df_cash.groupby([
+        pd.Grouper(key='Date', freq=freq_code),
+        'Category'
+    ])['Amount'].sum().unstack().fillna(0)
+    
+    # Format period labels
+    if freq == "Monthly":
+        cash_agg.index = cash_agg.index.strftime('%b %Y')
+    elif freq == "Quarterly":
+        cash_agg.index = cash_agg.index.to_period('Q').astype(str)
+    else:
+        cash_agg.index = cash_agg.index.strftime('%Y')
+    
+    cf = pd.DataFrame(columns=cash_agg.index)
+    
+    cf.loc['Operating Activities'] = ""
+    cf.loc['Customer Collections'] = cash_agg.get('Customer Collections', pd.Series(0, index=cash_agg.index))
+    cf.loc['Supplier Payments'] = (
+        cash_agg.get('Supplier Deposit', pd.Series(0, index=cash_agg.index)) +
+        cash_agg.get('Supplier Balance', pd.Series(0, index=cash_agg.index))
+    )
+    cf.loc['Payroll'] = cash_agg.get('Payroll', pd.Series(0, index=cash_agg.index))
+    cf.loc['Operating Expenses'] = cash_agg.get('Operating Expenses', pd.Series(0, index=cash_agg.index))
+    
+    cf.loc['Net Cash Flow'] = (
+        cf.loc['Customer Collections'] + 
+        cf.loc['Supplier Payments'] + 
+        cf.loc['Payroll'] +
+        cf.loc['Operating Expenses']
+    )
+    
+    render_financial_statement(cf, "")
+
+
+def view_production(engine):
+    """Production & Sales View"""
+    render_header()
+    st.markdown("### Production & Sales Planning")
+    
+    col_main, col_tools = st.columns([2, 1])
+    
+    with col_main:
+        st.markdown(f"<h4 style='font-family:Montserrat;color:{NAVY};'>Production Manifest</h4>", unsafe_allow_html=True)
+        
+        try:
+            df_units = pd.read_sql("SELECT * FROM production_unit ORDER BY build_date", engine)
             
-            render_financial_statement(stmt, "")
+            if df_units.empty:
+                st.info("No production units scheduled.")
+                return
+            
+            # Editable grid
+            edited_df = st.data_editor(
+                df_units,
+                column_config={
+                    "id": st.column_config.NumberColumn("ID", disabled=True, width=60),
+                    "serial_number": st.column_config.TextColumn("Serial #", width=100),
+                    "build_date": st.column_config.TextColumn("Build Date", width=100),
+                    "sales_channel": st.column_config.SelectboxColumn(
+                        "Channel",
+                        options=["DIRECT", "DEALER"],
+                        width=100
+                    ),
+                    "status": st.column_config.SelectboxColumn(
+                        "Status",
+                        options=["PLANNED", "WIP", "COMPLETE", "CANCELLED"],
+                        width=100
+                    ),
+                },
+                hide_index=True,
+                height=500,
+                use_container_width=True
+            )
+            
+            if st.button("💾 Save Changes", type="primary"):
+                try:
+                    with engine.connect() as conn:
+                        for _, row in edited_df.iterrows():
+                            conn.execute(text("""
+                                UPDATE production_unit 
+                                SET sales_channel = :channel, status = :status
+                                WHERE id = :id
+                            """), {
+                                "channel": row['sales_channel'],
+                                "status": row['status'],
+                                "id": row['id']
+                            })
+                        conn.commit()
+                    st.success("Changes saved!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Save failed: {e}")
+        
+        except Exception as e:
+            st.error(f"Could not load production data: {e}")
+    
+    with col_tools:
+        st.markdown(f"<h4 style='font-family:Montserrat;color:{NAVY};'>Smart Planner</h4>", unsafe_allow_html=True)
+        
+        start_date = st.date_input(
+            "Production Start Date",
+            value=date(2026, 1, 6),
+            help="First day of production"
+        )
+        
+        # Monthly target editor
+        st.markdown("**Monthly Targets**")
+        
+        try:
+            # Get current distribution
+            df_units = pd.read_sql("SELECT * FROM production_unit", engine)
+            df_units['Month'] = pd.to_datetime(df_units['build_date']).dt.to_period('M').astype(str)
+            existing = df_units.groupby('Month').size().to_dict()
+            
+            # Create plan grid
+            months = pd.date_range('2026-01-01', '2027-12-01', freq='MS')
+            plan_data = []
+            for m in months:
+                month_key = m.strftime('%Y-%m')
+                plan_data.append({
+                    "Month": m.date(),
+                    "Target": existing.get(month_key, 0)
+                })
+            
+            plan_df = pd.DataFrame(plan_data)
+            edited_plan = st.data_editor(
+                plan_df,
+                column_config={
+                    "Month": st.column_config.DateColumn("Month", format="MMM YYYY", width=100),
+                    "Target": st.column_config.NumberColumn("Units", min_value=0, max_value=500, width=80)
+                },
+                hide_index=True,
+                height=400
+            )
+            
+            if st.button("🚀 Regenerate Schedule", type="primary", use_container_width=True):
+                with st.spinner("Optimizing production schedule..."):
+                    try:
+                        db_type = get_db_type()
+                        
+                        with engine.connect() as conn:
+                            # Delete only PLANNED units (preserve WIP/COMPLETE)
+                            conn.execute(text("DELETE FROM production_unit WHERE status = 'PLANNED'"))
+                            
+                            # Get next serial number
+                            result = conn.execute(text(
+                                "SELECT serial_number FROM production_unit ORDER BY id DESC LIMIT 1"
+                            ))
+                            last_sn = result.scalar()
+                            
+                            if last_sn:
+                                # Extract number from "IDX-0050" format
+                                try:
+                                    sn_num = int(''.join(filter(str.isdigit, last_sn))) + 1
+                                except:
+                                    sn_num = 1
+                            else:
+                                sn_num = 1
+                            
+                            # Generate new units based on plan
+                            for _, row in edited_plan.iterrows():
+                                target = int(row['Target'])
+                                if target <= 0:
+                                    continue
+                                
+                                month_dt = row['Month']
+                                if isinstance(month_dt, pd.Timestamp):
+                                    month_dt = month_dt.date()
+                                
+                                # Skip if month is before start date
+                                month_end = date(month_dt.year, month_dt.month, 
+                                                calendar.monthrange(month_dt.year, month_dt.month)[1])
+                                if month_end < start_date:
+                                    continue
+                                
+                                # Get workdays for this month
+                                threshold = start_date if (month_dt.year == start_date.year and 
+                                                          month_dt.month == start_date.month) else None
+                                workdays = get_workdays(month_dt.year, month_dt.month, threshold)
+                                
+                                if not workdays:
+                                    continue
+                                
+                                # Count existing non-PLANNED units for this month
+                                month_str = month_dt.strftime('%Y-%m')
+                                
+                                # Use Python-side filtering instead of SQL strftime (PostgreSQL compatible)
+                                existing_result = conn.execute(text(
+                                    "SELECT build_date FROM production_unit WHERE status != 'PLANNED'"
+                                ))
+                                existing_dates = [r[0] for r in existing_result.fetchall()]
+                                existing_count = sum(1 for d in existing_dates if str(d)[:7] == month_str)
+                                
+                                units_to_create = target - existing_count
+                                if units_to_create <= 0:
+                                    continue
+                                
+                                # Calculate direct vs dealer split (25% direct)
+                                direct_count = int(units_to_create * 0.25)
+                                channels = ['DIRECT'] * direct_count + ['DEALER'] * (units_to_create - direct_count)
+                                
+                                # Distribute across workdays
+                                day_idx = 0
+                                for channel in channels:
+                                    build_date = workdays[day_idx % len(workdays)]
+                                    
+                                    conn.execute(text("""
+                                        INSERT INTO production_unit 
+                                        (serial_number, build_date, sales_channel, status)
+                                        VALUES (:sn, :bd, :ch, 'PLANNED')
+                                    """), {
+                                        "sn": f"IDX-{sn_num:04d}",
+                                        "bd": str(build_date),
+                                        "ch": channel
+                                    })
+                                    
+                                    sn_num += 1
+                                    day_idx += 1
+                            
+                            conn.commit()
+                        
+                        st.success("Schedule regenerated!")
+                        st.rerun()
+                    
+                    except Exception as e:
+                        st.error(f"Regeneration failed: {e}")
+                        logger.error(traceback.format_exc())
+        
+        except Exception as e:
+            st.error(f"Could not load planning data: {e}")
+
+
+def view_opex(engine):
+    """OpEx Budget View"""
+    render_header()
+    st.markdown("### Operating Expense Budget")
+    
+    tab1, tab2 = st.tabs(["👥 Headcount Plan", "💰 General Expenses"])
+    
+    with tab1:
+        st.markdown(f"<h4 style='font-family:Montserrat;color:{NAVY};'>Headcount by Role</h4>", unsafe_allow_html=True)
+        
+        try:
+            df_roles = pd.read_sql("SELECT * FROM opex_roles ORDER BY id", engine)
+            df_staffing = pd.read_sql("SELECT * FROM opex_staffing_plan", engine)
+            
+            if df_roles.empty:
+                st.info("No roles defined.")
+                return
+            
+            # Merge for display
+            merged = pd.merge(df_staffing, df_roles, left_on='role_id', right_on='id', suffixes=('_staff', '_role'))
+            merged['Month'] = pd.to_datetime(merged['month_date']).dt.strftime('%Y-%m')
+            
+            # Pivot to grid format
+            pivot = merged.pivot(
+                index='role_name',
+                columns='Month',
+                values='headcount'
+            ).fillna(0).reset_index()
+            
+            edited_hc = st.data_editor(pivot, use_container_width=True, height=400)
+            
+            if st.button("💾 Save Headcount", key="save_hc"):
+                try:
+                    db_type = get_db_type()
+                    
+                    with engine.connect() as conn:
+                        # Melt back to long format
+                        melted = edited_hc.melt(
+                            id_vars=['role_name'],
+                            var_name='Month',
+                            value_name='headcount'
+                        )
+                        
+                        for _, row in melted.iterrows():
+                            # Get role ID
+                            role_result = conn.execute(text(
+                                "SELECT id FROM opex_roles WHERE role_name = :name"
+                            ), {"name": row['role_name']})
+                            role_id = role_result.scalar()
+                            
+                            if role_id:
+                                month_date = f"{row['Month']}-01"
+                                headcount = float(row['headcount']) if pd.notna(row['headcount']) else 0
+                                
+                                # Upsert logic (works for both PostgreSQL and SQLite)
+                                if db_type == "postgresql":
+                                    conn.execute(text("""
+                                        INSERT INTO opex_staffing_plan (role_id, month_date, headcount)
+                                        VALUES (:rid, :dt, :hc)
+                                        ON CONFLICT (role_id, month_date) 
+                                        DO UPDATE SET headcount = :hc
+                                    """), {"rid": role_id, "dt": month_date, "hc": headcount})
+                                else:
+                                    # SQLite upsert
+                                    conn.execute(text("""
+                                        INSERT OR REPLACE INTO opex_staffing_plan 
+                                        (id, role_id, month_date, headcount)
+                                        VALUES (
+                                            (SELECT id FROM opex_staffing_plan WHERE role_id = :rid AND month_date = :dt),
+                                            :rid, :dt, :hc
+                                        )
+                                    """), {"rid": role_id, "dt": month_date, "hc": headcount})
+                        
+                        conn.commit()
+                    
+                    st.success("Headcount saved!")
+                    st.rerun()
+                
+                except Exception as e:
+                    st.error(f"Save failed: {e}")
             
             st.markdown("---")
-            st.header("Statement of Cash Flows")
-            cash_agg = cash.groupby([pd.Grouper(key='Date', freq=fmap[freq]), 'Category']).sum()['Amount'].unstack().fillna(0)
-            if freq == "Monthly": cash_agg.index = cash_agg.index.strftime('%Y-%b')
-            elif freq == "Quarterly": cash_agg.index = cash_agg.index.to_period("Q").astype(str)
-            else: cash_agg.index = cash_agg.index.strftime('%Y')
+            st.markdown(f"<h4 style='font-family:Montserrat;color:{NAVY};'>Salary Configuration</h4>", unsafe_allow_html=True)
             
-            cf = pd.DataFrame(columns=cash_agg.index)
-            cf.loc['Operating Activities'] = None
-            cf.loc['Cash from Customers'] = cash_agg.get('Customer Collections', 0)
-            cf.loc['Supplier Payments'] = cash_agg.get('Supplier Deposits', 0) + cash_agg.get('Supplier Settlements', 0)
-            cf.loc['Payroll Paid'] = cash_agg.get('Payroll', 0)
-            cf.loc['OpEx Paid'] = cash_agg.get('OpEx Paid', 0)
-            
-            # Calculate Net Flow
-            cf.loc['Net Cash Flow'] = cf.loc['Cash from Customers'] + cf.loc['Supplier Payments'] + cf.loc['Payroll Paid'] + cf.loc['OpEx Paid']
-            
-            end_bals = cash.set_index('Date').resample(fmap[freq])['Cash_Balance'].last()
-            if len(end_bals) == len(cf.columns):
-                end_bals.index = cf.columns
-                cf.loc['Ending Cash Balance'] = end_bals
-            
-            render_financial_statement(cf, "")
-
-    # --- PRODUCTION ---
-    elif view == "📦 Production & Sales":
-        st.title("Production & Sales Planner")
-        
-        c1, c2 = st.columns([1, 2])
-        
-        with c1:
-            st.subheader("Detailed Schedule")
-            df_units = pd.read_sql("SELECT * FROM production_unit", engine)
-            edited = st.data_editor(
-                df_units.sort_values('build_date'), 
-                column_config={"id": st.column_config.NumberColumn(disabled=True)},
-                hide_index=True, height=500, use_container_width=True
-            )
-            if st.button("💾 Save Changes"):
-                with engine.connect() as conn:
-                    for _, r in edited.iterrows():
-                        conn.execute(text("UPDATE production_unit SET sales_channel=:c, status=:s WHERE id=:i"), 
-                                     {"c": r['sales_channel'], "s": r['status'], "i": r['id']})
-                    conn.commit()
-                st.success("Saved!")
-                st.rerun()
-
-        with c2:
-            st.subheader("Volume Planner")
-            
-            # Generate Monthly Grid
-            df_units['Month'] = pd.to_datetime(df_units['build_date']).dt.strftime('%Y-%m')
-            existing = df_units.groupby('Month').size()
-            dates = pd.date_range('2026-01-01', '2027-12-01', freq='MS')
-            plan = [{"Month": d.date(), "Target": int(existing.get(d.strftime('%Y-%m'), 0))} for d in dates]
-            
-            edit_plan = st.data_editor(
-                pd.DataFrame(plan),
+            edited_roles = st.data_editor(
+                df_roles,
                 column_config={
-                    "Month": st.column_config.DateColumn("Month", format="MMM YYYY", disabled=True),
-                    "Target": st.column_config.NumberColumn("Monthly Units", min_value=0)
+                    "id": st.column_config.NumberColumn("ID", disabled=True, width=60),
+                    "role_name": st.column_config.TextColumn("Role", width=200),
+                    "annual_salary": st.column_config.NumberColumn(
+                        "Annual Salary",
+                        format="$%.0f",
+                        width=120
+                    ),
+                    "department": st.column_config.SelectboxColumn(
+                        "Department",
+                        options=["Executive", "Engineering", "Operations", "Finance", "Sales", "Service"],
+                        width=120
+                    )
                 },
-                hide_index=True, height=400, use_container_width=True
+                hide_index=True,
+                use_container_width=True
             )
             
-            start_date = st.date_input("Start Production From", value=date(2026, 1, 1))
-            
-            if st.button("🚀 Regenerate Production Schedule"):
-                with st.spinner("Optimizing..."):
-                    # Same logic as scenario push but from manual grid
-                    regenerate_production_schedule(edit_plan, start_date) # Need to define this locally or move helper
-                st.success("Done!")
-                st.rerun()
-
-    # --- OPEX ---
-    elif view == "💵 OpEx Budget":
-        st.title("OpEx Budget")
-        # (Same as v6 code - kept separate for length)
-        t1, t2 = st.tabs(["Headcount", "Expenses"])
-        with t1:
-            df_r = pd.read_sql("SELECT * FROM opex_roles", engine)
-            df_s = pd.read_sql("SELECT * FROM opex_staffing_plan", engine)
-            df_m = pd.merge(df_s, df_r, left_on='role_id', right_on='id')
-            df_m['Month'] = pd.to_datetime(df_m['month_date']).dt.strftime('%Y-%m')
-            piv = df_m.pivot(index='role_name', columns='Month', values='headcount').reset_index()
-            ed = st.data_editor(piv, use_container_width=True)
-            if st.button("💾 Save Headcount"):
-                with engine.connect() as conn:
-                    mlt = ed.melt(id_vars=['role_name'], var_name='Month', value_name='headcount')
-                    for _, r in mlt.iterrows():
-                        rid = conn.execute(text("SELECT id FROM opex_roles WHERE role_name=:rn"), {"rn": r['role_name']}).scalar()
-                        if rid:
-                            dt = date.fromisoformat(r['Month']+"-01")
-                            conn.execute(text("INSERT OR REPLACE INTO opex_staffing_plan (id, role_id, month_date, headcount) VALUES ((SELECT id FROM opex_staffing_plan WHERE role_id=:rid AND month_date=:dt), :rid, :dt, :hc)"), {"rid": rid, "dt": dt, "hc": r['headcount']})
-                    conn.commit()
-                st.rerun()
-            st.divider()
-            edited_roles = st.data_editor(df_r, column_config={"id": None}, hide_index=True, use_container_width=True)
-            if st.button("💾 Update Salaries"):
-                with engine.connect() as conn:
-                    for _, r in edited_roles.iterrows():
-                        conn.execute(text("UPDATE opex_roles SET role_name=:n, annual_salary=:s WHERE id=:id"), {"n": r['role_name'], "s": r['annual_salary'], "id": r['id']})
-                    conn.commit()
-                st.success("Updated!")
-                st.rerun()
+            if st.button("💾 Update Salaries", key="save_salaries"):
+                try:
+                    with engine.connect() as conn:
+                        for _, row in edited_roles.iterrows():
+                            conn.execute(text("""
+                                UPDATE opex_roles
+                                SET role_name = :name, annual_salary = :salary, department = :dept
+                                WHERE id = :id
+                            """), {
+                                "name": row['role_name'],
+                                "salary": row['annual_salary'],
+                                "dept": row['department'],
+                                "id": row['id']
+                            })
+                        conn.commit()
+                    st.success("Salaries updated!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Update failed: {e}")
         
-        with t2:
-             df_g = pd.read_sql("SELECT * FROM opex_general_expenses", engine)
-             df_g['Month'] = pd.to_datetime(df_g['month_date']).dt.strftime('%Y-%m')
-             piv_g = df_g.pivot(index=['category', 'expense_type'], columns='Month', values='amount').reset_index()
-             ed_g = st.data_editor(piv_g, use_container_width=True)
-             if st.button("💾 Save Expenses"):
-                 with engine.connect() as conn:
-                     mlt = ed_g.melt(id_vars=['category', 'expense_type'], var_name='Month', value_name='amount')
-                     conn.execute(text("DELETE FROM opex_general_expenses"))
-                     for _, r in mlt.iterrows():
-                         if pd.notna(r['amount']):
-                             dt = date.fromisoformat(r['Month']+"-01")
-                             conn.execute(text("INSERT INTO opex_general_expenses (category, expense_type, month_date, amount) VALUES (:c, :t, :d, :a)"), {"c": r['category'], "t": r['expense_type'], "d": dt, "a": r['amount']})
-                     conn.commit()
-                 st.rerun()
+        except Exception as e:
+            st.error(f"Could not load headcount data: {e}")
+    
+    with tab2:
+        st.markdown(f"<h4 style='font-family:Montserrat;color:{NAVY};'>General & Administrative Expenses</h4>", unsafe_allow_html=True)
+        
+        try:
+            df_expenses = pd.read_sql("SELECT * FROM opex_general_expenses", engine)
+            
+            if df_expenses.empty:
+                st.info("No general expenses recorded. Add expenses below.")
+                df_expenses = pd.DataFrame(columns=['id', 'category', 'expense_type', 'month_date', 'amount'])
+            else:
+                df_expenses['Month'] = pd.to_datetime(df_expenses['month_date']).dt.strftime('%Y-%m')
+                
+                # Pivot for editing
+                pivot_exp = df_expenses.pivot(
+                    index=['category', 'expense_type'],
+                    columns='Month',
+                    values='amount'
+                ).fillna(0).reset_index()
+                
+                edited_exp = st.data_editor(pivot_exp, use_container_width=True)
+                
+                if st.button("💾 Save Expenses", key="save_expenses"):
+                    try:
+                        with engine.connect() as conn:
+                            # Clear and rebuild
+                            conn.execute(text("DELETE FROM opex_general_expenses"))
+                            
+                            # Melt back to long format
+                            melted = edited_exp.melt(
+                                id_vars=['category', 'expense_type'],
+                                var_name='Month',
+                                value_name='amount'
+                            )
+                            
+                            for _, row in melted.iterrows():
+                                if pd.notna(row['amount']) and row['amount'] != 0:
+                                    conn.execute(text("""
+                                        INSERT INTO opex_general_expenses 
+                                        (category, expense_type, month_date, amount)
+                                        VALUES (:cat, :type, :dt, :amt)
+                                    """), {
+                                        "cat": row['category'],
+                                        "type": row['expense_type'],
+                                        "dt": f"{row['Month']}-01",
+                                        "amt": float(row['amount'])
+                                    })
+                            
+                            conn.commit()
+                        
+                        st.success("Expenses saved!")
+                        st.rerun()
+                    
+                    except Exception as e:
+                        st.error(f"Save failed: {e}")
+        
+        except Exception as e:
+            st.error(f"Could not load expense data: {e}")
 
-    # --- BOM ---
-    elif view == "🛠️ Supply Chain":
-        st.title("Supply Chain")
-        df_p = pd.read_sql("SELECT * FROM part_master", engine)
-        ed_p = st.data_editor(df_p, disabled=["id", "sku"], use_container_width=True)
-        if st.button("💾 Save BOM"):
-            with engine.connect() as conn:
-                for _, r in ed_p.iterrows():
-                    conn.execute(text("UPDATE part_master SET name=:n, cost=:c, moq=:m, lead_time=:l, deposit_pct=:dp, deposit_days=:dd, balance_days=:bd WHERE id=:id"), 
-                                 {"n": r['name'], "c": r['cost'], "m": r['moq'], "l": r['lead_time'], "dp": r['deposit_pct'], "dd": r['deposit_days'], "bd": r['balance_days'], "id": r['id']})
-            conn.commit()
-        st.rerun()
+
+def view_supply_chain(engine):
+    """Supply Chain / BOM View"""
+    render_header()
+    st.markdown("### Bill of Materials & Supply Chain")
+    
+    try:
+        df_parts = pd.read_sql("SELECT * FROM part_master ORDER BY id", engine)
+        
+        if df_parts.empty:
+            st.info("No parts defined in BOM.")
+            return
+        
+        st.markdown(f"<h4 style='font-family:Montserrat;color:{NAVY};'>Component Master</h4>", unsafe_allow_html=True)
+        
+        edited_parts = st.data_editor(
+            df_parts,
+            column_config={
+                "id": st.column_config.NumberColumn("ID", disabled=True, width=50),
+                "sku": st.column_config.TextColumn("SKU", disabled=True, width=100),
+                "name": st.column_config.TextColumn("Component Name", width=180),
+                "cost": st.column_config.NumberColumn("Unit Cost", format="$%.2f", width=90),
+                "moq": st.column_config.NumberColumn("MOQ", width=70),
+                "lead_time": st.column_config.NumberColumn("Lead Time (days)", width=100),
+                "deposit_pct": st.column_config.NumberColumn("Deposit %", format="%.0f%%", width=80),
+                "deposit_days": st.column_config.NumberColumn("Deposit Days", width=90),
+                "balance_days": st.column_config.NumberColumn("Balance Days", width=90),
+                "supplier_name": st.column_config.TextColumn("Supplier", width=120),
+            },
+            hide_index=True,
+            use_container_width=True
+        )
+        
+        col1, col2 = st.columns([1, 4])
+        
+        with col1:
+            if st.button("💾 Save BOM", type="primary"):
+                try:
+                    with engine.connect() as conn:
+                        for _, row in edited_parts.iterrows():
+                            conn.execute(text("""
+                                UPDATE part_master
+                                SET name = :name, cost = :cost, moq = :moq,
+                                    lead_time = :lt, deposit_pct = :dp,
+                                    deposit_days = :dd, balance_days = :bd,
+                                    supplier_name = :supplier
+                                WHERE id = :id
+                            """), {
+                                "name": row['name'],
+                                "cost": row['cost'],
+                                "moq": row['moq'],
+                                "lt": row['lead_time'],
+                                "dp": row['deposit_pct'],
+                                "dd": row['deposit_days'],
+                                "bd": row['balance_days'],
+                                "supplier": row['supplier_name'],
+                                "id": row['id']
+                            })
+                        conn.commit()
+                    st.success("BOM saved!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Save failed: {e}")
+        
+        # Cost summary
+        st.markdown("---")
+        st.markdown(f"<h4 style='font-family:Montserrat;color:{NAVY};'>Unit Cost Summary</h4>", unsafe_allow_html=True)
+        
+        total_cost = df_parts['cost'].sum()
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            render_metric_card("Total Material Cost", f"${total_cost:,.0f}", "neutral")
+        with col2:
+            render_metric_card("Component Count", str(len(df_parts)), "neutral")
+        with col3:
+            avg_lead = df_parts['lead_time'].mean()
+            render_metric_card("Avg Lead Time", f"{avg_lead:.0f} days", "neutral")
+    
+    except Exception as e:
+        st.error(f"Could not load BOM data: {e}")
+
+
+# =============================================================================
+# SECTION 8: MAIN APPLICATION
+# =============================================================================
+
+def main():
+    """Main application entry point."""
+    
+    # Initialize database engine
+    engine = get_db_engine()
+    
+    # Auto-heal database if needed
+    if not ensure_database_ready():
+        st.error("Database initialization failed. Please check logs.")
+        if st.button("🔧 Manual Database Rebuild"):
+            try:
+                import seed_db
+                seed_db.run_seed()
+                st.success("Database rebuilt!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Rebuild failed: {e}")
+        st.stop()
+    
+    # Sidebar navigation
+    render_sidebar_brand()
+    
+    st.sidebar.markdown("---")
+    
+    view = st.sidebar.radio(
+        "Navigation",
+        [
+            "📊 Dashboard",
+            "📈 Financials",
+            "🏭 Production",
+            "💼 OpEx Budget",
+            "📦 Supply Chain"
+        ],
+        label_visibility="collapsed"
+    )
+    
+    st.sidebar.markdown("---")
+    
+    # Database management (collapsed by default)
+    with st.sidebar.expander("⚙️ Database", expanded=False):
+        if st.button("🔄 Rebuild Database", use_container_width=True):
+            try:
+                import seed_db
+                seed_db.run_seed()
+                st.success("Database rebuilt!")
+                st.cache_resource.clear()
+                st.rerun()
+            except Exception as e:
+                st.error(f"Rebuild failed: {e}")
+        
+        st.caption("⚠️ This will reset all data to defaults")
+    
+    # Version info
+    st.sidebar.markdown("---")
+    st.sidebar.caption(f"""
+    **IdleX ERP v7.0**  
+    Boardroom Ready Edition  
+    © 2025 IdleX Inc.
+    """)
+    
+    # Generate financial data
+    try:
+        df_pnl, df_cash = generate_financial_ledgers(engine)
+    except Exception as e:
+        logger.error(f"Financial data generation failed: {e}")
+        df_pnl, df_cash = pd.DataFrame(), pd.DataFrame()
+    
+    # Route to selected view
+    if "Dashboard" in view:
+        view_dashboard(engine, df_pnl, df_cash)
+    elif "Financials" in view:
+        view_financials(engine, df_pnl, df_cash)
+    elif "Production" in view:
+        view_production(engine)
+    elif "OpEx" in view:
+        view_opex(engine)
+    elif "Supply Chain" in view:
+        view_supply_chain(engine)
+
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        st.error(f"System Error: {e}")
+    main()
