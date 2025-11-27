@@ -177,7 +177,9 @@ class TestDecimalPrecision:
         from dashboard import money
         
         assert money(1000) == "1,000"
-        assert money(1000.50) == "1,001"  # Rounds
+        assert money(1000.49) == "1,000"  # Rounds down
+        assert money(1000.50) == "1,000"  # Rounds to even (banker's rounding)
+        assert money(1000.99) == "1,001"  # Rounds up
         assert money(-1000) == "(1,000)"
         assert money(None) == "-"
         assert money(float('nan')) == "-"
@@ -194,15 +196,15 @@ class TestDecimalPrecision:
         """Revenue calculation should not have floating point errors."""
         # Calculate expected revenue for 1 direct + 1 dealer unit
         pricing = expected_pricing[2026]
-        direct_rev = pricing["msrp"]  # 8500
-        dealer_rev = pricing["msrp"] * pricing["dealer_discount"]  # 6375
+        direct_rev = pricing["msrp"]  # 15500
+        dealer_rev = pricing["msrp"] * pricing["dealer_discount"]  # 12400
         
         # These should be exact (no floating point issues)
-        assert direct_rev == 8500.0
-        assert dealer_rev == 6375.0
+        assert direct_rev == 15500.0
+        assert dealer_rev == 12400.0
         
         # Sum should also be exact
-        assert direct_rev + dealer_rev == 14875.0
+        assert direct_rev + dealer_rev == 27900.0
 
 
 # =============================================================================

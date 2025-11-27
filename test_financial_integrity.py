@@ -38,8 +38,8 @@ import pandas as pd
 # =============================================================================
 
 # Financial constants (must match dashboard.py)
-DEFAULT_MSRP = 8500.0
-DEFAULT_DEALER_DISCOUNT = 0.75  # Dealer pays 75% of MSRP
+DEFAULT_MSRP = 15500.0
+DEFAULT_DEALER_DISCOUNT = 0.80  # Dealer pays 80% of MSRP
 DEALER_PAYMENT_LAG = 30  # days
 
 # Tolerance for floating point comparisons
@@ -408,15 +408,15 @@ def test_bom_calculations(engine, results):
         results.add_pass(f"{test_name}: ${unit_material_cost:,.2f}")
     
     # Test: Gross margin sanity check
-    # Assuming avg selling price ~$7,000 (weighted by channel mix)
-    avg_selling_price = DEFAULT_MSRP * 0.8  # Assume 80% is dealer price
+    # With MSRP $15,500 (direct) and $12,400 (dealer at 80%)
+    avg_selling_price = 13500.0  # Weighted average based on channel mix
     gross_margin_pct = (avg_selling_price - unit_material_cost) / avg_selling_price * 100
     
     test_name = "Gross Margin Range"
-    if gross_margin_pct < 30:
-        results.add_fail(test_name, ">30%", f"{gross_margin_pct:.1f}%", "Margin too low")
-    elif gross_margin_pct > 70:
-        results.add_warning(test_name, f"High margin ({gross_margin_pct:.1f}%) - verify pricing")
+    if gross_margin_pct < 50:
+        results.add_fail(test_name, ">50%", f"{gross_margin_pct:.1f}%", "Margin too low for new pricing")
+    elif gross_margin_pct > 85:
+        results.add_warning(test_name, f"Very high margin ({gross_margin_pct:.1f}%) - verify BOM")
     else:
         results.add_pass(f"{test_name}: {gross_margin_pct:.1f}%")
         

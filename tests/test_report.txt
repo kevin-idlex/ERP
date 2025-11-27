@@ -1,0 +1,360 @@
+============================= test session starts =============================
+platform win32 -- Python 3.11.9, pytest-9.0.1, pluggy-1.6.0 -- C:\Users\Kevin\AppData\Local\Microsoft\WindowsApps\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\python.exe
+cachedir: .pytest_cache
+metadata: {'Python': '3.11.9', 'Platform': 'Windows-10-10.0.26100-SP0', 'Packages': {'pytest': '9.0.1', 'pluggy': '1.6.0'}, 'Plugins': {'html': '4.1.1', 'metadata': '3.1.1'}}
+rootdir: D:\Dropbox\IdleX\IdleX_ERP\tests
+plugins: html-4.1.1, metadata-3.1.1
+collecting ... collected 78 items
+
+test_cash_waterfall.py::TestPureInflow::test_c01_single_inflow FAILED    [  1%]
+test_cash_waterfall.py::TestPureInflow::test_c01_multiple_inflows FAILED [  2%]
+test_cash_waterfall.py::TestMaterialSufficientCash::test_c02_material_from_cash FAILED [  3%]
+test_cash_waterfall.py::TestMaterialUsesLOC::test_c03_material_draws_loc FAILED [  5%]
+test_cash_waterfall.py::TestLOCLimit::test_c04_loc_limit_exceeded FAILED [  6%]
+test_cash_waterfall.py::TestOpExStrictMode::test_c05_opex_no_loc_strict FAILED [  7%]
+test_cash_waterfall.py::TestOpExRelaxedMode::test_c06_opex_uses_loc_relaxed FAILED [  8%]
+test_cash_waterfall.py::TestCashIdentity::test_c07_cash_flow_identity FAILED [ 10%]
+test_cash_waterfall.py::TestWaterfallEdgeCases::test_empty_dataframe FAILED [ 11%]
+test_cash_waterfall.py::TestWaterfallEdgeCases::test_chronological_ordering FAILED [ 12%]
+test_cash_waterfall.py::TestWaterfallEdgeCases::test_revenue_pays_down_loc FAILED [ 14%]
+test_cash_waterfall.py::TestWaterfallEdgeCases::test_starting_equity FAILED [ 15%]
+test_financial_engine.py::TestUnitMaterialCost::test_f01_calculate_unit_material_cost FAILED [ 16%]
+test_financial_engine.py::TestUnitMaterialCost::test_f01_material_cost_range FAILED [ 17%]
+test_financial_engine.py::TestRevenuePerUnit::test_f02_direct_revenue PASSED [ 19%]
+test_financial_engine.py::TestRevenuePerUnit::test_f02_dealer_revenue PASSED [ 20%]
+test_financial_engine.py::TestRevenuePerUnit::test_f02_dealer_less_than_direct PASSED [ 21%]
+test_financial_engine.py::TestMonthlyRevenue::test_f03_generate_financial_ledgers_returns_data FAILED [ 23%]
+test_financial_engine.py::TestMonthlyRevenue::test_f03_revenue_matches_manual_calc FAILED [ 24%]
+test_financial_engine.py::TestCOGSCalculation::test_f04_total_cogs_calculation FAILED [ 25%]
+test_financial_engine.py::TestPayrollCalculation::test_f05_monthly_payroll_calculation FAILED [ 26%]
+test_financial_engine.py::TestGeneralExpenses::test_f06_expenses_in_pnl FAILED [ 28%]
+test_financial_engine.py::TestLedgerCompleteness::test_f07_revenue_entry_per_unit FAILED [ 29%]
+test_financial_engine.py::TestLedgerCompleteness::test_f07_cogs_entry_per_unit FAILED [ 30%]
+test_financial_engine.py::TestLedgerCompleteness::test_f07_cash_entry_per_unit FAILED [ 32%]
+test_production.py::TestChannelMixConsistency::test_channel_config_matches_production PASSED [ 33%]
+test_production.py::TestChannelMixConsistency::test_no_units_without_channel PASSED [ 34%]
+test_production.py::TestChannelMixConsistency::test_only_valid_channels PASSED [ 35%]
+test_production.py::TestRegenerateSchedule::test_p01_only_planned_units_deleted PASSED [ 37%]
+test_production.py::TestRegenerateSchedule::test_p01_all_seeded_units_planned PASSED [ 38%]
+test_production.py::TestWorkdayScheduling::test_p02_no_weekend_builds PASSED [ 39%]
+test_production.py::TestWorkdayScheduling::test_p02_builds_distributed_across_month PASSED [ 41%]
+test_production.py::TestChannelMixEnforcement::test_p03_direct_percentage_increases_over_time PASSED [ 42%]
+test_production.py::TestChannelMixEnforcement::test_p03_q1_2026_heavy_dealer PASSED [ 43%]
+test_production.py::TestChannelMixEnforcement::test_p03_q4_2028_more_direct PASSED [ 44%]
+test_production.py::TestManifestUpdates::test_p04_channel_update_persists PASSED [ 46%]
+test_production.py::TestManifestUpdates::test_p04_status_update_persists PASSED [ 47%]
+test_production.py::TestChannelRevenueImpact::test_revenue_varies_by_channel PASSED [ 48%]
+test_regression.py::TestEmptyTables::test_r01_empty_production_unit FAILED [ 50%]
+test_regression.py::TestEmptyTables::test_r01_empty_staffing_plan FAILED [ 51%]
+test_regression.py::TestEmptyTables::test_r01_empty_bom FAILED           [ 52%]
+test_regression.py::TestMissingConfig::test_r02_missing_pricing_config FAILED [ 53%]
+test_regression.py::TestMissingConfig::test_r02_missing_channel_mix FAILED [ 55%]
+test_regression.py::TestCrossDBConsistency::test_r03_revenue_parity SKIPPED [ 56%]
+test_regression.py::TestCrossDBConsistency::test_r03_unit_count_parity SKIPPED [ 57%]
+test_regression.py::TestDateBoundaries::test_year_boundary_pricing PASSED [ 58%]
+test_regression.py::TestDateBoundaries::test_quarter_boundary_channel_mix PASSED [ 60%]
+test_regression.py::TestDecimalPrecision::test_money_formatting FAILED   [ 61%]
+test_regression.py::TestDecimalPrecision::test_pct_formatting FAILED     [ 62%]
+test_regression.py::TestDecimalPrecision::test_revenue_precision PASSED  [ 64%]
+test_regression.py::TestErrorHandling::test_invalid_date_handling FAILED [ 65%]
+test_regression.py::TestErrorHandling::test_get_workdays_edge_cases FAILED [ 66%]
+test_regression.py::TestPerformance::test_large_ledger_generation FAILED [ 67%]
+test_regression.py::TestPerformance::test_cash_waterfall_performance FAILED [ 69%]
+test_seed_schema.py::TestSchemaExistence::test_s01_all_tables_exist PASSED [ 70%]
+test_seed_schema.py::TestSchemaExistence::test_s01_production_unit_columns PASSED [ 71%]
+test_seed_schema.py::TestSchemaExistence::test_s01_part_master_columns PASSED [ 73%]
+test_seed_schema.py::TestGlobalConfig::test_s02_start_cash PASSED        [ 74%]
+test_seed_schema.py::TestGlobalConfig::test_s02_loc_limit PASSED         [ 75%]
+test_seed_schema.py::TestGlobalConfig::test_s02_msrp_price PASSED        [ 76%]
+test_seed_schema.py::TestGlobalConfig::test_s02_dealer_discount PASSED   [ 78%]
+test_seed_schema.py::TestBOMCost::test_s03_bom_items_exist PASSED        [ 79%]
+test_seed_schema.py::TestBOMCost::test_s03_bom_cost_calculation PASSED   [ 80%]
+test_seed_schema.py::TestBOMCost::test_s03_key_parts_qty PASSED          [ 82%]
+test_seed_schema.py::TestProductionPlan::test_s04_units_have_required_fields PASSED [ 83%]
+test_seed_schema.py::TestProductionPlan::test_s04_all_status_planned PASSED [ 84%]
+test_seed_schema.py::TestProductionPlan::test_s05_total_units_2026 PASSED [ 85%]
+test_seed_schema.py::TestProductionPlan::test_s05_total_units_2027 FAILED [ 87%]
+test_seed_schema.py::TestProductionPlan::test_s05_total_units_2028 PASSED [ 88%]
+test_seed_schema.py::TestProductionPlan::test_s05_total_units_all_years PASSED [ 89%]
+test_seed_schema.py::TestStaffingPlan::test_s06_staffing_months_exist FAILED [ 91%]
+test_seed_schema.py::TestStaffingPlan::test_s06_ceo_headcount_constant PASSED [ 92%]
+test_seed_schema.py::TestStaffingPlan::test_s06_no_assemblers PASSED     [ 93%]
+test_seed_schema.py::TestPricingConfig::test_s07_pricing_2026 PASSED     [ 94%]
+test_seed_schema.py::TestPricingConfig::test_s07_pricing_2028 PASSED     [ 96%]
+test_seed_schema.py::TestChannelMixConfig::test_s08_channel_mix_exists PASSED [ 97%]
+test_seed_schema.py::TestChannelMixConfig::test_s08_channel_mix_values PASSED [ 98%]
+test_seed_schema.py::TestChannelMixConfig::test_s08_channel_mix_progression PASSED [100%]
+
+================================== FAILURES ===================================
+____________________ TestPureInflow.test_c01_single_inflow ____________________
+test_cash_waterfall.py:37: in test_c01_single_inflow
+    from dashboard import run_cash_waterfall
+..\dashboard.py:27: in <module>
+    import plotly.express as px
+E   ModuleNotFoundError: No module named 'plotly'
+__________________ TestPureInflow.test_c01_multiple_inflows ___________________
+test_cash_waterfall.py:51: in test_c01_multiple_inflows
+    from dashboard import run_cash_waterfall
+..\dashboard.py:27: in <module>
+    import plotly.express as px
+E   ModuleNotFoundError: No module named 'plotly'
+___________ TestMaterialSufficientCash.test_c02_material_from_cash ____________
+test_cash_waterfall.py:74: in test_c02_material_from_cash
+    from dashboard import run_cash_waterfall
+..\dashboard.py:27: in <module>
+    import plotly.express as px
+E   ModuleNotFoundError: No module named 'plotly'
+_______________ TestMaterialUsesLOC.test_c03_material_draws_loc _______________
+test_cash_waterfall.py:97: in test_c03_material_draws_loc
+    from dashboard import run_cash_waterfall
+..\dashboard.py:27: in <module>
+    import plotly.express as px
+E   ModuleNotFoundError: No module named 'plotly'
+__________________ TestLOCLimit.test_c04_loc_limit_exceeded ___________________
+test_cash_waterfall.py:121: in test_c04_loc_limit_exceeded
+    from dashboard import run_cash_waterfall
+..\dashboard.py:27: in <module>
+    import plotly.express as px
+E   ModuleNotFoundError: No module named 'plotly'
+_______________ TestOpExStrictMode.test_c05_opex_no_loc_strict ________________
+test_cash_waterfall.py:146: in test_c05_opex_no_loc_strict
+    from dashboard import run_cash_waterfall
+..\dashboard.py:27: in <module>
+    import plotly.express as px
+E   ModuleNotFoundError: No module named 'plotly'
+_____________ TestOpExRelaxedMode.test_c06_opex_uses_loc_relaxed ______________
+test_cash_waterfall.py:170: in test_c06_opex_uses_loc_relaxed
+    from dashboard import run_cash_waterfall
+..\dashboard.py:27: in <module>
+    import plotly.express as px
+E   ModuleNotFoundError: No module named 'plotly'
+________________ TestCashIdentity.test_c07_cash_flow_identity _________________
+test_cash_waterfall.py:195: in test_c07_cash_flow_identity
+    from dashboard import run_cash_waterfall
+..\dashboard.py:27: in <module>
+    import plotly.express as px
+E   ModuleNotFoundError: No module named 'plotly'
+_________________ TestWaterfallEdgeCases.test_empty_dataframe _________________
+test_cash_waterfall.py:233: in test_empty_dataframe
+    from dashboard import run_cash_waterfall
+..\dashboard.py:27: in <module>
+    import plotly.express as px
+E   ModuleNotFoundError: No module named 'plotly'
+_____________ TestWaterfallEdgeCases.test_chronological_ordering ______________
+test_cash_waterfall.py:242: in test_chronological_ordering
+    from dashboard import run_cash_waterfall
+..\dashboard.py:27: in <module>
+    import plotly.express as px
+E   ModuleNotFoundError: No module named 'plotly'
+______________ TestWaterfallEdgeCases.test_revenue_pays_down_loc ______________
+test_cash_waterfall.py:258: in test_revenue_pays_down_loc
+    from dashboard import run_cash_waterfall
+..\dashboard.py:27: in <module>
+    import plotly.express as px
+E   ModuleNotFoundError: No module named 'plotly'
+_________________ TestWaterfallEdgeCases.test_starting_equity _________________
+test_cash_waterfall.py:277: in test_starting_equity
+    from dashboard import run_cash_waterfall
+..\dashboard.py:27: in <module>
+    import plotly.express as px
+E   ModuleNotFoundError: No module named 'plotly'
+_________ TestUnitMaterialCost.test_f01_calculate_unit_material_cost __________
+test_financial_engine.py:28: in test_f01_calculate_unit_material_cost
+    from dashboard import calculate_unit_material_cost
+..\dashboard.py:27: in <module>
+    import plotly.express as px
+E   ModuleNotFoundError: No module named 'plotly'
+______________ TestUnitMaterialCost.test_f01_material_cost_range ______________
+test_financial_engine.py:45: in test_f01_material_cost_range
+    from dashboard import calculate_unit_material_cost
+..\dashboard.py:27: in <module>
+    import plotly.express as px
+E   ModuleNotFoundError: No module named 'plotly'
+_____ TestMonthlyRevenue.test_f03_generate_financial_ledgers_returns_data _____
+test_financial_engine.py:95: in test_f03_generate_financial_ledgers_returns_data
+    from dashboard import generate_financial_ledgers
+..\dashboard.py:27: in <module>
+    import plotly.express as px
+E   ModuleNotFoundError: No module named 'plotly'
+___________ TestMonthlyRevenue.test_f03_revenue_matches_manual_calc ___________
+test_financial_engine.py:104: in test_f03_revenue_matches_manual_calc
+    from dashboard import generate_financial_ledgers
+..\dashboard.py:27: in <module>
+    import plotly.express as px
+E   ModuleNotFoundError: No module named 'plotly'
+_____________ TestCOGSCalculation.test_f04_total_cogs_calculation _____________
+test_financial_engine.py:146: in test_f04_total_cogs_calculation
+    from dashboard import generate_financial_ledgers, calculate_unit_material_cost
+..\dashboard.py:27: in <module>
+    import plotly.express as px
+E   ModuleNotFoundError: No module named 'plotly'
+_________ TestPayrollCalculation.test_f05_monthly_payroll_calculation _________
+test_financial_engine.py:188: in test_f05_monthly_payroll_calculation
+    from dashboard import generate_financial_ledgers
+..\dashboard.py:27: in <module>
+    import plotly.express as px
+E   ModuleNotFoundError: No module named 'plotly'
+________________ TestGeneralExpenses.test_f06_expenses_in_pnl _________________
+test_financial_engine.py:207: in test_f06_expenses_in_pnl
+    from dashboard import generate_financial_ledgers
+..\dashboard.py:27: in <module>
+    import plotly.express as px
+E   ModuleNotFoundError: No module named 'plotly'
+___________ TestLedgerCompleteness.test_f07_revenue_entry_per_unit ____________
+test_financial_engine.py:239: in test_f07_revenue_entry_per_unit
+    from dashboard import generate_financial_ledgers
+..\dashboard.py:27: in <module>
+    import plotly.express as px
+E   ModuleNotFoundError: No module named 'plotly'
+_____________ TestLedgerCompleteness.test_f07_cogs_entry_per_unit _____________
+test_financial_engine.py:254: in test_f07_cogs_entry_per_unit
+    from dashboard import generate_financial_ledgers
+..\dashboard.py:27: in <module>
+    import plotly.express as px
+E   ModuleNotFoundError: No module named 'plotly'
+_____________ TestLedgerCompleteness.test_f07_cash_entry_per_unit _____________
+test_financial_engine.py:272: in test_f07_cash_entry_per_unit
+    from dashboard import generate_financial_ledgers
+..\dashboard.py:27: in <module>
+    import plotly.express as px
+E   ModuleNotFoundError: No module named 'plotly'
+_______________ TestEmptyTables.test_r01_empty_production_unit ________________
+test_regression.py:27: in test_r01_empty_production_unit
+    from dashboard import generate_financial_ledgers
+..\dashboard.py:27: in <module>
+    import plotly.express as px
+E   ModuleNotFoundError: No module named 'plotly'
+________________ TestEmptyTables.test_r01_empty_staffing_plan _________________
+test_regression.py:43: in test_r01_empty_staffing_plan
+    from dashboard import generate_financial_ledgers
+..\dashboard.py:27: in <module>
+    import plotly.express as px
+E   ModuleNotFoundError: No module named 'plotly'
+_____________________ TestEmptyTables.test_r01_empty_bom ______________________
+test_regression.py:57: in test_r01_empty_bom
+    from dashboard import calculate_unit_material_cost
+..\dashboard.py:27: in <module>
+    import plotly.express as px
+E   ModuleNotFoundError: No module named 'plotly'
+______________ TestMissingConfig.test_r02_missing_pricing_config ______________
+test_regression.py:76: in test_r02_missing_pricing_config
+    from dashboard import generate_financial_ledgers
+..\dashboard.py:27: in <module>
+    import plotly.express as px
+E   ModuleNotFoundError: No module named 'plotly'
+_______________ TestMissingConfig.test_r02_missing_channel_mix ________________
+test_regression.py:92: in test_r02_missing_channel_mix
+    from dashboard import generate_financial_ledgers
+..\dashboard.py:27: in <module>
+    import plotly.express as px
+E   ModuleNotFoundError: No module named 'plotly'
+_________________ TestDecimalPrecision.test_money_formatting __________________
+test_regression.py:177: in test_money_formatting
+    from dashboard import money
+..\dashboard.py:27: in <module>
+    import plotly.express as px
+E   ModuleNotFoundError: No module named 'plotly'
+__________________ TestDecimalPrecision.test_pct_formatting ___________________
+test_regression.py:187: in test_pct_formatting
+    from dashboard import pct
+..\dashboard.py:27: in <module>
+    import plotly.express as px
+E   ModuleNotFoundError: No module named 'plotly'
+________________ TestErrorHandling.test_invalid_date_handling _________________
+test_regression.py:217: in test_invalid_date_handling
+    from dashboard import parse_date
+..\dashboard.py:27: in <module>
+    import plotly.express as px
+E   ModuleNotFoundError: No module named 'plotly'
+_______________ TestErrorHandling.test_get_workdays_edge_cases ________________
+test_regression.py:230: in test_get_workdays_edge_cases
+    from dashboard import get_workdays
+..\dashboard.py:27: in <module>
+    import plotly.express as px
+E   ModuleNotFoundError: No module named 'plotly'
+________________ TestPerformance.test_large_ledger_generation _________________
+test_regression.py:252: in test_large_ledger_generation
+    from dashboard import generate_financial_ledgers
+..\dashboard.py:27: in <module>
+    import plotly.express as px
+E   ModuleNotFoundError: No module named 'plotly'
+_______________ TestPerformance.test_cash_waterfall_performance _______________
+test_regression.py:267: in test_cash_waterfall_performance
+    from dashboard import generate_financial_ledgers, run_cash_waterfall
+..\dashboard.py:27: in <module>
+    import plotly.express as px
+E   ModuleNotFoundError: No module named 'plotly'
+________________ TestProductionPlan.test_s05_total_units_2027 _________________
+test_seed_schema.py:224: in test_s05_total_units_2027
+    assert abs(count - expected) / expected < 0.05, \
+E   AssertionError: 2027 units: expected ~11322, got 12322
+E   assert (1000 / 11322) < 0.05
+E    +  where 1000 = abs((12322 - 11322))
+_______________ TestStaffingPlan.test_s06_staffing_months_exist _______________
+C:\Users\Kevin\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\sqlalchemy\engine\base.py:1967: in _exec_single_context
+    self.dialect.do_execute(
+C:\Users\Kevin\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\sqlalchemy\engine\default.py:951: in do_execute
+    cursor.execute(statement, parameters)
+E   sqlite3.OperationalError: no such column: month
+
+The above exception was the direct cause of the following exception:
+test_seed_schema.py:261: in test_s06_staffing_months_exist
+    months = conn.execute(text("""
+C:\Users\Kevin\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\sqlalchemy\engine\base.py:1419: in execute
+    return meth(
+C:\Users\Kevin\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\sqlalchemy\sql\elements.py:526: in _execute_on_connection
+    return connection._execute_clauseelement(
+C:\Users\Kevin\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\sqlalchemy\engine\base.py:1641: in _execute_clauseelement
+    ret = self._execute_context(
+C:\Users\Kevin\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\sqlalchemy\engine\base.py:1846: in _execute_context
+    return self._exec_single_context(
+C:\Users\Kevin\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\sqlalchemy\engine\base.py:1986: in _exec_single_context
+    self._handle_dbapi_exception(
+C:\Users\Kevin\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\sqlalchemy\engine\base.py:2355: in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+C:\Users\Kevin\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\sqlalchemy\engine\base.py:1967: in _exec_single_context
+    self.dialect.do_execute(
+C:\Users\Kevin\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\sqlalchemy\engine\default.py:951: in do_execute
+    cursor.execute(statement, parameters)
+E   sqlalchemy.exc.OperationalError: (sqlite3.OperationalError) no such column: month
+E   [SQL: 
+E                   SELECT DISTINCT month FROM opex_staffing_plan ORDER BY month
+E               ]
+E   (Background on this error at: https://sqlalche.me/e/20/e3q8)
+=========================== short test summary info ===========================
+FAILED test_cash_waterfall.py::TestPureInflow::test_c01_single_inflow - Modul...
+FAILED test_cash_waterfall.py::TestPureInflow::test_c01_multiple_inflows - Mo...
+FAILED test_cash_waterfall.py::TestMaterialSufficientCash::test_c02_material_from_cash
+FAILED test_cash_waterfall.py::TestMaterialUsesLOC::test_c03_material_draws_loc
+FAILED test_cash_waterfall.py::TestLOCLimit::test_c04_loc_limit_exceeded - Mo...
+FAILED test_cash_waterfall.py::TestOpExStrictMode::test_c05_opex_no_loc_strict
+FAILED test_cash_waterfall.py::TestOpExRelaxedMode::test_c06_opex_uses_loc_relaxed
+FAILED test_cash_waterfall.py::TestCashIdentity::test_c07_cash_flow_identity
+FAILED test_cash_waterfall.py::TestWaterfallEdgeCases::test_empty_dataframe
+FAILED test_cash_waterfall.py::TestWaterfallEdgeCases::test_chronological_ordering
+FAILED test_cash_waterfall.py::TestWaterfallEdgeCases::test_revenue_pays_down_loc
+FAILED test_cash_waterfall.py::TestWaterfallEdgeCases::test_starting_equity
+FAILED test_financial_engine.py::TestUnitMaterialCost::test_f01_calculate_unit_material_cost
+FAILED test_financial_engine.py::TestUnitMaterialCost::test_f01_material_cost_range
+FAILED test_financial_engine.py::TestMonthlyRevenue::test_f03_generate_financial_ledgers_returns_data
+FAILED test_financial_engine.py::TestMonthlyRevenue::test_f03_revenue_matches_manual_calc
+FAILED test_financial_engine.py::TestCOGSCalculation::test_f04_total_cogs_calculation
+FAILED test_financial_engine.py::TestPayrollCalculation::test_f05_monthly_payroll_calculation
+FAILED test_financial_engine.py::TestGeneralExpenses::test_f06_expenses_in_pnl
+FAILED test_financial_engine.py::TestLedgerCompleteness::test_f07_revenue_entry_per_unit
+FAILED test_financial_engine.py::TestLedgerCompleteness::test_f07_cogs_entry_per_unit
+FAILED test_financial_engine.py::TestLedgerCompleteness::test_f07_cash_entry_per_unit
+FAILED test_regression.py::TestEmptyTables::test_r01_empty_production_unit - ...
+FAILED test_regression.py::TestEmptyTables::test_r01_empty_staffing_plan - Mo...
+FAILED test_regression.py::TestEmptyTables::test_r01_empty_bom - ModuleNotFou...
+FAILED test_regression.py::TestMissingConfig::test_r02_missing_pricing_config
+FAILED test_regression.py::TestMissingConfig::test_r02_missing_channel_mix - ...
+FAILED test_regression.py::TestDecimalPrecision::test_money_formatting - Modu...
+FAILED test_regression.py::TestDecimalPrecision::test_pct_formatting - Module...
+FAILED test_regression.py::TestErrorHandling::test_invalid_date_handling - Mo...
+FAILED test_regression.py::TestErrorHandling::test_get_workdays_edge_cases - ...
+FAILED test_regression.py::TestPerformance::test_large_ledger_generation - Mo...
+FAILED test_regression.py::TestPerformance::test_cash_waterfall_performance
+FAILED test_seed_schema.py::TestProductionPlan::test_s05_total_units_2027 - A...
+FAILED test_seed_schema.py::TestStaffingPlan::test_s06_staffing_months_exist
+================== 35 failed, 41 passed, 2 skipped in 13.34s ==================

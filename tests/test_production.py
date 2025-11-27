@@ -275,12 +275,12 @@ class TestChannelRevenueImpact:
             
             revenue_by_year[year] = revenue_by_year.get(year, 0) + (count * unit_rev)
         
-        # 2026 revenue should be ~$15M based on ~2000 units at avg ~$7000
+        # 2026 revenue should be ~$28M based on ~2000 units at avg ~$14000
         if 2026 in revenue_by_year:
-            assert 10_000_000 < revenue_by_year[2026] < 20_000_000, \
+            assert 20_000_000 < revenue_by_year[2026] < 40_000_000, \
                 f"2026 revenue ${revenue_by_year[2026]:,.0f} outside expected range"
         
-        # 2028 revenue should be ~$200M+ based on ~30000 units
+        # 2028 revenue should be ~$350M+ based on ~30000 units
         if 2028 in revenue_by_year:
-            assert revenue_by_year[2028] > 150_000_000, \
+            assert revenue_by_year[2028] > 250_000_000, \
                 f"2028 revenue ${revenue_by_year[2028]:,.0f} seems too low"

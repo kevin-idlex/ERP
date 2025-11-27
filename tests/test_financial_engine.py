@@ -63,7 +63,7 @@ class TestRevenuePerUnit:
         
         # Direct revenue = MSRP
         expected_direct_revenue = msrp
-        assert expected_direct_revenue == 8500
+        assert expected_direct_revenue == 15500
     
     def test_f02_dealer_revenue(self, engine_sqlite, expected_pricing):
         """Dealer sales should use discounted price."""
@@ -72,7 +72,7 @@ class TestRevenuePerUnit:
         
         # Dealer revenue = MSRP × discount
         expected_dealer_revenue = msrp * discount
-        assert expected_dealer_revenue == 6375  # 8500 × 0.75
+        assert expected_dealer_revenue == 12400  # 15500 × 0.80
     
     def test_f02_dealer_less_than_direct(self, engine_sqlite, expected_pricing):
         """Dealer price must always be less than direct."""

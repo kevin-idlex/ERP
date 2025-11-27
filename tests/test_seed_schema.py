@@ -79,44 +79,44 @@ class TestGlobalConfig:
     """Verify critical global configuration values."""
     
     def test_s02_start_cash(self, engine_sqlite):
-        """Starting cash should be $1.6M."""
+        """Starting cash should be $1.5M."""
         with engine_sqlite.connect() as conn:
             result = conn.execute(text(
                 "SELECT setting_value FROM global_config WHERE setting_key = 'start_cash'"
             )).fetchone()
         
         assert result is not None, "start_cash not found"
-        assert result[0] == "1600000", f"Expected 1600000, got {result[0]}"
+        assert result[0] == "1500000", f"Expected 1500000, got {result[0]}"
     
     def test_s02_loc_limit(self, engine_sqlite):
-        """LOC limit should be $500K."""
+        """LOC limit should be $4.1M."""
         with engine_sqlite.connect() as conn:
             result = conn.execute(text(
                 "SELECT setting_value FROM global_config WHERE setting_key = 'loc_limit'"
             )).fetchone()
         
         assert result is not None, "loc_limit not found"
-        assert result[0] == "500000", f"Expected 500000, got {result[0]}"
+        assert result[0] == "4100000", f"Expected 4100000, got {result[0]}"
     
     def test_s02_msrp_price(self, engine_sqlite):
-        """Default MSRP should be $8,500."""
+        """Default MSRP should be $15,500."""
         with engine_sqlite.connect() as conn:
             result = conn.execute(text(
                 "SELECT setting_value FROM global_config WHERE setting_key = 'msrp_price'"
             )).fetchone()
         
         assert result is not None, "msrp_price not found"
-        assert result[0] == "8500", f"Expected 8500, got {result[0]}"
+        assert result[0] == "15500", f"Expected 15500, got {result[0]}"
     
     def test_s02_dealer_discount(self, engine_sqlite):
-        """Default dealer discount should be 0.75 (75% of MSRP)."""
+        """Default dealer discount should be 0.80 (80% of MSRP)."""
         with engine_sqlite.connect() as conn:
             result = conn.execute(text(
                 "SELECT setting_value FROM global_config WHERE setting_key = 'dealer_discount'"
             )).fetchone()
         
         assert result is not None, "dealer_discount not found"
-        assert result[0] == "0.75", f"Expected 0.75, got {result[0]}"
+        assert result[0] == "0.80", f"Expected 0.80, got {result[0]}"
 
 
 # =============================================================================
@@ -259,7 +259,7 @@ class TestStaffingPlan:
         """Should have 36 months of staffing data (Jan 2026 - Dec 2028)."""
         with engine_sqlite.connect() as conn:
             months = conn.execute(text("""
-                SELECT DISTINCT month FROM opex_staffing_plan ORDER BY month
+                SELECT DISTINCT month_date FROM opex_staffing_plan ORDER BY month_date
             """)).fetchall()
         
         assert len(months) == 36, f"Expected 36 months, got {len(months)}"
@@ -307,7 +307,7 @@ class TestPricingConfig:
     """Verify pricing configuration."""
     
     def test_s07_pricing_2026(self, engine_sqlite, expected_pricing):
-        """2026 pricing: MSRP=$8,500, dealer=75%."""
+        """2026 pricing: MSRP=$15,500, dealer=80%."""
         with engine_sqlite.connect() as conn:
             row = conn.execute(text("""
                 SELECT msrp, dealer_discount_pct FROM pricing_config WHERE year = 2026
@@ -318,7 +318,7 @@ class TestPricingConfig:
         assert row[1] == expected_pricing[2026]["dealer_discount"]
     
     def test_s07_pricing_2028(self, engine_sqlite, expected_pricing):
-        """2028 pricing: MSRP=$8,750, dealer=77%."""
+        """2028 pricing: MSRP=$11,500, dealer=80%."""
         with engine_sqlite.connect() as conn:
             row = conn.execute(text("""
                 SELECT msrp, dealer_discount_pct FROM pricing_config WHERE year = 2028

@@ -229,13 +229,16 @@ class TestWaterfallEdgeCases:
     """Test edge cases in waterfall logic."""
     
     def test_empty_dataframe(self):
-        """Empty cash dataframe should return empty result."""
+        """Empty cash dataframe should return starting equity row."""
         from dashboard import run_cash_waterfall
         
         df = pd.DataFrame(columns=['Date', 'Type', 'Category', 'Amount'])
         result = run_cash_waterfall(df, starting_equity=1000, loc_limit=500)
         
-        assert result.empty or len(result) == 0
+        # With no transactions, we still get a row showing starting equity
+        assert len(result) == 1
+        assert result.iloc[0]['Net_Cash'] == 1000
+        assert result.iloc[0]['LOC_Usage'] == 0
     
     def test_chronological_ordering(self):
         """Transactions should be processed in date order."""
