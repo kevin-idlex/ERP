@@ -400,6 +400,29 @@ def run_seed():
             )
         """))
         
+        # --- Pricing Configuration (by Year) ---
+        conn.execute(text(f"""
+            CREATE TABLE pricing_config (
+                id {SERIAL_PK},
+                year INTEGER UNIQUE NOT NULL,
+                msrp REAL NOT NULL,
+                dealer_discount_pct REAL NOT NULL,
+                notes TEXT
+            )
+        """))
+        
+        # --- Channel Mix Configuration (by Quarter) ---
+        conn.execute(text(f"""
+            CREATE TABLE channel_mix_config (
+                id {SERIAL_PK},
+                year INTEGER NOT NULL,
+                quarter INTEGER NOT NULL,
+                direct_pct REAL NOT NULL,
+                notes TEXT,
+                UNIQUE(year, quarter)
+            )
+        """))
+        
         conn.commit()
         
         # =================================================================
@@ -896,6 +919,46 @@ def run_seed():
                 INSERT INTO opex_general_expenses (category, expense_type, month_date, amount)
                 VALUES (:cat, :type, :dt, :amt)
             """), {"cat": category, "type": exp_type, "dt": month_date, "amt": amount})
+        
+        # --- Pricing Configuration (by Year) ---
+        # MSRP and dealer discount can change over time as product matures
+        pricing_by_year = [
+            (2026, 8500.00, 0.75, "Launch pricing - 25% dealer margin"),
+            (2027, 8500.00, 0.75, "Maintain pricing through growth"),
+            (2028, 8750.00, 0.77, "Price increase with premium features"),
+        ]
+        
+        for year, msrp, dealer_disc, notes in pricing_by_year:
+            conn.execute(text("""
+                INSERT INTO pricing_config (year, msrp, dealer_discount_pct, notes)
+                VALUES (:y, :m, :d, :n)
+            """), {"y": year, "m": msrp, "d": dealer_disc, "n": notes})
+        
+        # --- Channel Mix Configuration (by Quarter) ---
+        # Direct vs Dealer split - shifts toward direct as brand builds
+        channel_mix = [
+            # 2026 - Heavy dealer reliance during launch
+            (2026, 1, 0.15, "Q1 2026 - Launch via dealer network"),
+            (2026, 2, 0.20, "Q2 2026 - Building direct presence"),
+            (2026, 3, 0.25, "Q3 2026 - Direct sales growing"),
+            (2026, 4, 0.25, "Q4 2026 - Balanced mix"),
+            # 2027 - Gradual shift to direct
+            (2027, 1, 0.28, "Q1 2027"),
+            (2027, 2, 0.30, "Q2 2027"),
+            (2027, 3, 0.32, "Q3 2027"),
+            (2027, 4, 0.35, "Q4 2027"),
+            # 2028 - Strong direct presence
+            (2028, 1, 0.38, "Q1 2028"),
+            (2028, 2, 0.40, "Q2 2028"),
+            (2028, 3, 0.42, "Q3 2028"),
+            (2028, 4, 0.45, "Q4 2028 - Target mix achieved"),
+        ]
+        
+        for year, quarter, direct_pct, notes in channel_mix:
+            conn.execute(text("""
+                INSERT INTO channel_mix_config (year, quarter, direct_pct, notes)
+                VALUES (:y, :q, :d, :n)
+            """), {"y": year, "q": quarter, "d": direct_pct, "n": notes})
         
         conn.commit()
         logger.info("✅ IdleX ERP database initialized successfully")

@@ -32,6 +32,7 @@ import math
 import os
 import traceback
 import logging
+import random
 
 # Configure logging for production debugging
 logging.basicConfig(
@@ -518,6 +519,24 @@ def generate_financial_ledgers(engine):
         if not df_expenses.empty:
             df_expenses['month_date'] = pd.to_datetime(df_expenses['month_date'])
         
+        # Load pricing configuration
+        try:
+            df_pricing = pd.read_sql("SELECT * FROM pricing_config", engine)
+            pricing_by_year = {row['year']: (row['msrp'], row['dealer_discount_pct']) 
+                              for _, row in df_pricing.iterrows()}
+        except:
+            # Fallback to defaults if table doesn't exist
+            pricing_by_year = {2026: (8500.0, 0.75), 2027: (8500.0, 0.75), 2028: (8750.0, 0.77)}
+        
+        # Load channel mix configuration
+        try:
+            df_channel = pd.read_sql("SELECT * FROM channel_mix_config", engine)
+            channel_by_yq = {(row['year'], row['quarter']): row['direct_pct'] 
+                            for _, row in df_channel.iterrows()}
+        except:
+            # Fallback to 25% direct
+            channel_by_yq = {}
+        
         # Calculate unit material cost
         unit_material_cost = 0.0
         for _, part in df_parts.iterrows():
@@ -526,9 +545,9 @@ def generate_financial_ledgers(engine):
                 qty = bom_match.iloc[0]['qty_per_unit']
                 unit_material_cost += qty * part['cost']
         
-        # Pricing constants
-        MSRP = 8500.0
-        DEALER_DISCOUNT = 0.75
+        # Default pricing constants (used if config missing)
+        DEFAULT_MSRP = 8500.0
+        DEFAULT_DEALER_DISCOUNT = 0.75
         DEALER_PAYMENT_LAG = 30  # days
         
         pnl_entries = []
@@ -541,8 +560,12 @@ def generate_financial_ledgers(engine):
             build_dt = unit['build_date']
             is_direct = unit['sales_channel'] == 'DIRECT'
             
+            # Get year-specific pricing
+            unit_year = build_dt.year
+            msrp, dealer_discount = pricing_by_year.get(unit_year, (DEFAULT_MSRP, DEFAULT_DEALER_DISCOUNT))
+            
             # Revenue calculation
-            revenue = MSRP if is_direct else MSRP * DEALER_DISCOUNT
+            revenue = msrp if is_direct else msrp * dealer_discount
             cash_lag = 0 if is_direct else DEALER_PAYMENT_LAG
             
             # P&L Entry: Revenue on build date (accrual)
@@ -1304,197 +1327,541 @@ def view_production(engine):
     render_header()
     st.markdown("### Production & Sales Planning")
     
-    col_main, col_tools = st.columns([2, 1])
+    # Tabs for different sections
+    tab_manifest, tab_planner, tab_pricing, tab_channel = st.tabs([
+        "📋 Production Manifest", 
+        "🚀 Smart Planner",
+        "💰 Pricing Config",
+        "📊 Channel Mix"
+    ])
     
-    with col_main:
-        st.markdown(f"<h4 style='font-family:Montserrat;color:{NAVY};'>Production Manifest</h4>", unsafe_allow_html=True)
+    with tab_manifest:
+        st.markdown(f"<h4 style='font-family:Montserrat;color:{NAVY};'>Production Schedule</h4>", unsafe_allow_html=True)
         
         try:
             df_units = pd.read_sql("SELECT * FROM production_unit ORDER BY build_date", engine)
             
             if df_units.empty:
                 st.info("No production units scheduled.")
-                return
-            
-            # Editable grid
-            edited_df = st.data_editor(
-                df_units,
-                column_config={
-                    "id": st.column_config.NumberColumn("ID", disabled=True, width=60),
-                    "serial_number": st.column_config.TextColumn("Serial #", width=100),
-                    "build_date": st.column_config.TextColumn("Build Date", width=100),
-                    "sales_channel": st.column_config.SelectboxColumn(
-                        "Channel",
-                        options=["DIRECT", "DEALER"],
-                        width=100
-                    ),
-                    "status": st.column_config.SelectboxColumn(
-                        "Status",
-                        options=["PLANNED", "WIP", "COMPLETE", "CANCELLED"],
-                        width=100
-                    ),
-                },
-                hide_index=True,
-                height=500,
-                use_container_width=True
-            )
-            
-            if st.button("💾 Save Changes", type="primary"):
-                try:
-                    with engine.connect() as conn:
-                        for _, row in edited_df.iterrows():
-                            conn.execute(text("""
-                                UPDATE production_unit 
-                                SET sales_channel = :channel, status = :status
-                                WHERE id = :id
-                            """), {
-                                "channel": row['sales_channel'],
-                                "status": row['status'],
-                                "id": row['id']
-                            })
-                        conn.commit()
-                    st.success("Changes saved!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Save failed: {e}")
+            else:
+                # Summary metrics
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Total Units", f"{len(df_units):,}")
+                with col2:
+                    direct = (df_units['sales_channel'] == 'DIRECT').sum()
+                    st.metric("Direct", f"{direct:,} ({direct/len(df_units)*100:.0f}%)")
+                with col3:
+                    dealer = (df_units['sales_channel'] == 'DEALER').sum()
+                    st.metric("Dealer", f"{dealer:,} ({dealer/len(df_units)*100:.0f}%)")
+                with col4:
+                    planned = (df_units['status'] == 'PLANNED').sum()
+                    st.metric("Planned", f"{planned:,}")
+                
+                # Editable grid
+                edited_df = st.data_editor(
+                    df_units,
+                    column_config={
+                        "id": st.column_config.NumberColumn("ID", disabled=True, width=60),
+                        "serial_number": st.column_config.TextColumn("Serial #", width=100),
+                        "build_date": st.column_config.TextColumn("Build Date", width=100),
+                        "sales_channel": st.column_config.SelectboxColumn(
+                            "Channel",
+                            options=["DIRECT", "DEALER"],
+                            width=100
+                        ),
+                        "status": st.column_config.SelectboxColumn(
+                            "Status",
+                            options=["PLANNED", "WIP", "COMPLETE", "CANCELLED"],
+                            width=100
+                        ),
+                    },
+                    hide_index=True,
+                    height=400,
+                    use_container_width=True
+                )
+                
+                if st.button("💾 Save Changes", type="primary", key="save_manifest"):
+                    try:
+                        with engine.connect() as conn:
+                            for _, row in edited_df.iterrows():
+                                conn.execute(text("""
+                                    UPDATE production_unit 
+                                    SET sales_channel = :channel, status = :status
+                                    WHERE id = :id
+                                """), {
+                                    "channel": row['sales_channel'],
+                                    "status": row['status'],
+                                    "id": row['id']
+                                })
+                            conn.commit()
+                        st.success("Changes saved!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Save failed: {e}")
         
         except Exception as e:
             st.error(f"Could not load production data: {e}")
     
-    with col_tools:
-        st.markdown(f"<h4 style='font-family:Montserrat;color:{NAVY};'>Smart Planner</h4>", unsafe_allow_html=True)
+    with tab_planner:
+        st.markdown(f"<h4 style='font-family:Montserrat;color:{NAVY};'>Smart Production Planner</h4>", unsafe_allow_html=True)
         
-        start_date = st.date_input(
-            "Production Start Date",
-            value=date(2026, 1, 6),
-            help="First day of production"
-        )
+        col_config, col_plan = st.columns([1, 2])
         
-        # Monthly target editor
-        st.markdown("**Monthly Targets**")
-        
-        try:
-            # Get current distribution
-            df_units = pd.read_sql("SELECT * FROM production_unit", engine)
-            df_units['Month'] = pd.to_datetime(df_units['build_date']).dt.to_period('M').astype(str)
-            existing = df_units.groupby('Month').size().to_dict()
-            
-            # Create plan grid
-            months = pd.date_range('2026-01-01', '2027-12-01', freq='MS')
-            plan_data = []
-            for m in months:
-                month_key = m.strftime('%Y-%m')
-                plan_data.append({
-                    "Month": m.date(),
-                    "Target": existing.get(month_key, 0)
-                })
-            
-            plan_df = pd.DataFrame(plan_data)
-            edited_plan = st.data_editor(
-                plan_df,
-                column_config={
-                    "Month": st.column_config.DateColumn("Month", format="MMM YYYY", width=100),
-                    "Target": st.column_config.NumberColumn("Units", min_value=0, max_value=500, width=80)
-                },
-                hide_index=True,
-                height=400
+        with col_config:
+            start_date = st.date_input(
+                "Production Start Date",
+                value=date(2026, 1, 6),
+                help="First day of production"
             )
             
-            if st.button("🚀 Regenerate Schedule", type="primary", use_container_width=True):
-                with st.spinner("Optimizing production schedule..."):
-                    try:
-                        db_type = get_db_type()
-                        
-                        with engine.connect() as conn:
-                            # Delete only PLANNED units (preserve WIP/COMPLETE)
-                            conn.execute(text("DELETE FROM production_unit WHERE status = 'PLANNED'"))
-                            
-                            # Get next serial number
-                            result = conn.execute(text(
-                                "SELECT serial_number FROM production_unit ORDER BY id DESC LIMIT 1"
-                            ))
-                            last_sn = result.scalar()
-                            
-                            if last_sn:
-                                # Extract number from "IDX-0050" format
-                                try:
-                                    sn_num = int(''.join(filter(str.isdigit, last_sn))) + 1
-                                except:
-                                    sn_num = 1
+            st.markdown("---")
+            st.caption("⚠️ Regenerating will delete all PLANNED units and create new ones based on targets below.")
+        
+        with col_plan:
+            try:
+                # Get current distribution
+                df_units = pd.read_sql("SELECT * FROM production_unit", engine)
+                df_units['Month'] = pd.to_datetime(df_units['build_date']).dt.to_period('M').astype(str)
+                existing = df_units.groupby('Month').size().to_dict()
+                
+                # Create plan grid
+                months = pd.date_range('2026-01-01', '2028-12-01', freq='MS')
+                plan_data = []
+                for m in months:
+                    month_key = m.strftime('%Y-%m')
+                    plan_data.append({
+                        "Month": m.date(),
+                        "Target": existing.get(month_key, 0)
+                    })
+                
+                plan_df = pd.DataFrame(plan_data)
+                edited_plan = st.data_editor(
+                    plan_df,
+                    column_config={
+                        "Month": st.column_config.DateColumn("Month", format="MMM YYYY", width=100),
+                        "Target": st.column_config.NumberColumn("Units", min_value=0, max_value=5000, width=80)
+                    },
+                    hide_index=True,
+                    height=400
+                )
+                
+                if st.button("🚀 Regenerate Schedule", type="primary", use_container_width=True):
+                    _regenerate_production_schedule(engine, edited_plan, start_date)
+                    
+            except Exception as e:
+                st.error(f"Could not load planning data: {e}")
+    
+    with tab_pricing:
+        st.markdown(f"<h4 style='font-family:Montserrat;color:{NAVY};'>Pricing Configuration by Year</h4>", unsafe_allow_html=True)
+        st.caption("Set MSRP and dealer discount percentage for each year")
+        
+        try:
+            df_pricing = pd.read_sql("SELECT * FROM pricing_config ORDER BY year", engine)
+            
+            if df_pricing.empty:
+                st.info("No pricing configuration found. Add pricing below.")
+                df_pricing = pd.DataFrame({
+                    'id': [None, None, None],
+                    'year': [2026, 2027, 2028],
+                    'msrp': [8500.0, 8500.0, 8750.0],
+                    'dealer_discount_pct': [0.75, 0.75, 0.77],
+                    'notes': ['', '', '']
+                })
+            
+            # Calculate derived fields for display
+            df_pricing['Dealer Price'] = df_pricing['msrp'] * df_pricing['dealer_discount_pct']
+            df_pricing['Dealer Margin'] = (1 - df_pricing['dealer_discount_pct']) * 100
+            
+            edited_pricing = st.data_editor(
+                df_pricing,
+                column_config={
+                    "id": None,  # Hide ID
+                    "year": st.column_config.NumberColumn("Year", disabled=True, width=80),
+                    "msrp": st.column_config.NumberColumn("MSRP ($)", format="$%.0f", width=100),
+                    "dealer_discount_pct": st.column_config.NumberColumn(
+                        "Dealer Pays %", 
+                        format="%.0f%%",
+                        min_value=0.5,
+                        max_value=1.0,
+                        help="Percentage of MSRP that dealer pays (e.g., 0.75 = 75%)",
+                        width=120
+                    ),
+                    "Dealer Price": st.column_config.NumberColumn("Dealer Price", format="$%.0f", disabled=True, width=110),
+                    "Dealer Margin": st.column_config.NumberColumn("Dealer Margin %", format="%.0f%%", disabled=True, width=120),
+                    "notes": st.column_config.TextColumn("Notes", width=200),
+                },
+                hide_index=True,
+                use_container_width=True
+            )
+            
+            if st.button("💾 Save Pricing", type="primary", key="save_pricing"):
+                try:
+                    with engine.connect() as conn:
+                        for _, row in edited_pricing.iterrows():
+                            if row['id'] is not None:
+                                conn.execute(text("""
+                                    UPDATE pricing_config 
+                                    SET msrp = :msrp, dealer_discount_pct = :disc, notes = :notes
+                                    WHERE id = :id
+                                """), {
+                                    "msrp": row['msrp'],
+                                    "disc": row['dealer_discount_pct'],
+                                    "notes": row['notes'] or '',
+                                    "id": row['id']
+                                })
                             else:
-                                sn_num = 1
-                            
-                            # Generate new units based on plan
-                            for _, row in edited_plan.iterrows():
-                                target = int(row['Target'])
-                                if target <= 0:
-                                    continue
-                                
-                                month_dt = row['Month']
-                                if isinstance(month_dt, pd.Timestamp):
-                                    month_dt = month_dt.date()
-                                
-                                # Skip if month is before start date
-                                month_end = date(month_dt.year, month_dt.month, 
-                                                calendar.monthrange(month_dt.year, month_dt.month)[1])
-                                if month_end < start_date:
-                                    continue
-                                
-                                # Get workdays for this month
-                                threshold = start_date if (month_dt.year == start_date.year and 
-                                                          month_dt.month == start_date.month) else None
-                                workdays = get_workdays(month_dt.year, month_dt.month, threshold)
-                                
-                                if not workdays:
-                                    continue
-                                
-                                # Count existing non-PLANNED units for this month
-                                month_str = month_dt.strftime('%Y-%m')
-                                
-                                # Use Python-side filtering instead of SQL strftime (PostgreSQL compatible)
-                                existing_result = conn.execute(text(
-                                    "SELECT build_date FROM production_unit WHERE status != 'PLANNED'"
-                                ))
-                                existing_dates = [r[0] for r in existing_result.fetchall()]
-                                existing_count = sum(1 for d in existing_dates if str(d)[:7] == month_str)
-                                
-                                units_to_create = target - existing_count
-                                if units_to_create <= 0:
-                                    continue
-                                
-                                # Calculate direct vs dealer split (25% direct)
-                                direct_count = int(units_to_create * 0.25)
-                                channels = ['DIRECT'] * direct_count + ['DEALER'] * (units_to_create - direct_count)
-                                
-                                # Distribute across workdays
-                                day_idx = 0
-                                for channel in channels:
-                                    build_date = workdays[day_idx % len(workdays)]
-                                    
+                                conn.execute(text("""
+                                    INSERT INTO pricing_config (year, msrp, dealer_discount_pct, notes)
+                                    VALUES (:year, :msrp, :disc, :notes)
+                                """), {
+                                    "year": row['year'],
+                                    "msrp": row['msrp'],
+                                    "disc": row['dealer_discount_pct'],
+                                    "notes": row['notes'] or ''
+                                })
+                        conn.commit()
+                    st.success("Pricing saved!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Save failed: {e}")
+            
+            # Revenue impact preview
+            st.markdown("---")
+            st.markdown(f"<h5 style='font-family:Montserrat;color:{NAVY};'>Revenue Impact Preview</h5>", unsafe_allow_html=True)
+            
+            try:
+                df_units = pd.read_sql("SELECT build_date, sales_channel FROM production_unit", engine)
+                df_units['build_date'] = pd.to_datetime(df_units['build_date'])
+                df_units['year'] = df_units['build_date'].dt.year
+                
+                preview_data = []
+                for year in [2026, 2027, 2028]:
+                    year_units = df_units[df_units['year'] == year]
+                    direct = (year_units['sales_channel'] == 'DIRECT').sum()
+                    dealer = (year_units['sales_channel'] == 'DEALER').sum()
+                    
+                    pricing_row = edited_pricing[edited_pricing['year'] == year]
+                    if not pricing_row.empty:
+                        msrp = pricing_row.iloc[0]['msrp']
+                        disc = pricing_row.iloc[0]['dealer_discount_pct']
+                    else:
+                        msrp, disc = 8500, 0.75
+                    
+                    direct_rev = direct * msrp
+                    dealer_rev = dealer * msrp * disc
+                    
+                    preview_data.append({
+                        'Year': year,
+                        'Direct Units': direct,
+                        'Dealer Units': dealer,
+                        'Direct Revenue': direct_rev,
+                        'Dealer Revenue': dealer_rev,
+                        'Total Revenue': direct_rev + dealer_rev
+                    })
+                
+                preview_df = pd.DataFrame(preview_data)
+                st.dataframe(
+                    preview_df,
+                    column_config={
+                        "Direct Revenue": st.column_config.NumberColumn(format="$%,.0f"),
+                        "Dealer Revenue": st.column_config.NumberColumn(format="$%,.0f"),
+                        "Total Revenue": st.column_config.NumberColumn(format="$%,.0f"),
+                    },
+                    hide_index=True,
+                    use_container_width=True
+                )
+            except:
+                pass
+                
+        except Exception as e:
+            st.error(f"Could not load pricing config: {e}")
+    
+    with tab_channel:
+        st.markdown(f"<h4 style='font-family:Montserrat;color:{NAVY};'>Channel Mix by Quarter</h4>", unsafe_allow_html=True)
+        st.caption("Set target Direct vs Dealer split by quarter. Use 'Apply to Schedule' to update production units.")
+        
+        try:
+            df_channel = pd.read_sql("SELECT * FROM channel_mix_config ORDER BY year, quarter", engine)
+            
+            if df_channel.empty:
+                # Create default data
+                channel_data = []
+                for year in [2026, 2027, 2028]:
+                    for q in [1, 2, 3, 4]:
+                        channel_data.append({
+                            'id': None,
+                            'year': year,
+                            'quarter': q,
+                            'direct_pct': 0.25,
+                            'notes': ''
+                        })
+                df_channel = pd.DataFrame(channel_data)
+            
+            # Add calculated dealer % for display
+            df_channel['dealer_pct'] = 1 - df_channel['direct_pct']
+            df_channel['period'] = df_channel.apply(lambda r: f"Q{r['quarter']} {r['year']}", axis=1)
+            
+            edited_channel = st.data_editor(
+                df_channel,
+                column_config={
+                    "id": None,
+                    "year": None,
+                    "quarter": None,
+                    "period": st.column_config.TextColumn("Quarter", disabled=True, width=100),
+                    "direct_pct": st.column_config.NumberColumn(
+                        "Direct %", 
+                        format="%.0f%%",
+                        min_value=0.0,
+                        max_value=1.0,
+                        help="Percentage of units sold direct (vs through dealers)",
+                        width=100
+                    ),
+                    "dealer_pct": st.column_config.NumberColumn(
+                        "Dealer %", 
+                        format="%.0f%%",
+                        disabled=True,
+                        width=100
+                    ),
+                    "notes": st.column_config.TextColumn("Notes", width=200),
+                },
+                hide_index=True,
+                use_container_width=True,
+                height=500
+            )
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                if st.button("💾 Save Channel Mix", type="primary", key="save_channel"):
+                    try:
+                        with engine.connect() as conn:
+                            for _, row in edited_channel.iterrows():
+                                if row['id'] is not None:
                                     conn.execute(text("""
-                                        INSERT INTO production_unit 
-                                        (serial_number, build_date, sales_channel, status)
-                                        VALUES (:sn, :bd, :ch, 'PLANNED')
+                                        UPDATE channel_mix_config 
+                                        SET direct_pct = :pct, notes = :notes
+                                        WHERE id = :id
                                     """), {
-                                        "sn": f"IDX-{sn_num:04d}",
-                                        "bd": str(build_date),
-                                        "ch": channel
+                                        "pct": row['direct_pct'],
+                                        "notes": row['notes'] or '',
+                                        "id": row['id']
                                     })
-                                    
-                                    sn_num += 1
-                                    day_idx += 1
+                                else:
+                                    conn.execute(text("""
+                                        INSERT INTO channel_mix_config (year, quarter, direct_pct, notes)
+                                        VALUES (:year, :q, :pct, :notes)
+                                    """), {
+                                        "year": row['year'],
+                                        "q": row['quarter'],
+                                        "pct": row['direct_pct'],
+                                        "notes": row['notes'] or ''
+                                    })
+                            conn.commit()
+                        st.success("Channel mix saved!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Save failed: {e}")
+            
+            with col2:
+                if st.button("🔄 Apply to Production Schedule", type="secondary", key="apply_channel"):
+                    try:
+                        with engine.connect() as conn:
+                            # Get all production units
+                            units = conn.execute(text("""
+                                SELECT id, build_date FROM production_unit
+                            """)).fetchall()
+                            
+                            updated = 0
+                            for unit_id, build_date in units:
+                                # Parse date and get quarter
+                                if isinstance(build_date, str):
+                                    bd = datetime.strptime(build_date[:10], '%Y-%m-%d')
+                                else:
+                                    bd = build_date
+                                
+                                year = bd.year
+                                quarter = (bd.month - 1) // 3 + 1
+                                
+                                # Find channel mix for this quarter
+                                channel_row = edited_channel[
+                                    (edited_channel['year'] == year) & 
+                                    (edited_channel['quarter'] == quarter)
+                                ]
+                                
+                                if not channel_row.empty:
+                                    direct_pct = channel_row.iloc[0]['direct_pct']
+                                else:
+                                    direct_pct = 0.25
+                                
+                                # Randomly assign based on probability
+                                import random
+                                channel = 'DIRECT' if random.random() < direct_pct else 'DEALER'
+                                
+                                conn.execute(text("""
+                                    UPDATE production_unit SET sales_channel = :ch WHERE id = :id
+                                """), {"ch": channel, "id": unit_id})
+                                updated += 1
                             
                             conn.commit()
-                        
-                        st.success("Schedule regenerated!")
+                        st.success(f"Updated {updated:,} units based on channel mix targets!")
                         st.rerun()
-                    
                     except Exception as e:
-                        st.error(f"Regeneration failed: {e}")
-                        logger.error(traceback.format_exc())
+                        st.error(f"Apply failed: {e}")
+            
+            # Show current vs target mix
+            st.markdown("---")
+            st.markdown(f"<h5 style='font-family:Montserrat;color:{NAVY};'>Current vs Target Mix</h5>", unsafe_allow_html=True)
+            
+            try:
+                df_units = pd.read_sql("SELECT build_date, sales_channel FROM production_unit", engine)
+                df_units['build_date'] = pd.to_datetime(df_units['build_date'])
+                df_units['year'] = df_units['build_date'].dt.year
+                df_units['quarter'] = (df_units['build_date'].dt.month - 1) // 3 + 1
+                
+                comparison = []
+                for year in [2026, 2027, 2028]:
+                    for q in [1, 2, 3, 4]:
+                        q_units = df_units[(df_units['year'] == year) & (df_units['quarter'] == q)]
+                        if len(q_units) > 0:
+                            actual_direct = (q_units['sales_channel'] == 'DIRECT').mean()
+                        else:
+                            actual_direct = 0
+                        
+                        target_row = edited_channel[
+                            (edited_channel['year'] == year) & 
+                            (edited_channel['quarter'] == q)
+                        ]
+                        target = target_row.iloc[0]['direct_pct'] if not target_row.empty else 0.25
+                        
+                        comparison.append({
+                            'Period': f"Q{q} {year}",
+                            'Units': len(q_units),
+                            'Target Direct %': target,
+                            'Actual Direct %': actual_direct,
+                            'Variance': actual_direct - target
+                        })
+                
+                comp_df = pd.DataFrame(comparison)
+                st.dataframe(
+                    comp_df,
+                    column_config={
+                        "Target Direct %": st.column_config.NumberColumn(format="%.0f%%"),
+                        "Actual Direct %": st.column_config.NumberColumn(format="%.0f%%"),
+                        "Variance": st.column_config.NumberColumn(format="%+.0f%%"),
+                    },
+                    hide_index=True,
+                    use_container_width=True
+                )
+            except:
+                pass
+                
+        except Exception as e:
+            st.error(f"Could not load channel config: {e}")
+
+
+def _regenerate_production_schedule(engine, plan_df, start_date):
+    """Helper function to regenerate production schedule from plan."""
+    with st.spinner("Optimizing production schedule..."):
+        try:
+            db_type = get_db_type()
+            
+            with engine.connect() as conn:
+                # Delete only PLANNED units (preserve WIP/COMPLETE)
+                conn.execute(text("DELETE FROM production_unit WHERE status = 'PLANNED'"))
+                
+                # Get next serial number
+                result = conn.execute(text(
+                    "SELECT serial_number FROM production_unit ORDER BY id DESC LIMIT 1"
+                ))
+                last_sn = result.scalar()
+                
+                if last_sn:
+                    try:
+                        sn_num = int(''.join(filter(str.isdigit, last_sn))) + 1
+                    except:
+                        sn_num = 1
+                else:
+                    sn_num = 1
+                
+                # Load channel mix config
+                try:
+                    channel_config = {}
+                    channel_rows = conn.execute(text(
+                        "SELECT year, quarter, direct_pct FROM channel_mix_config"
+                    )).fetchall()
+                    for year, quarter, pct in channel_rows:
+                        channel_config[(year, quarter)] = pct
+                except:
+                    channel_config = {}
+                
+                # Generate new units based on plan
+                for _, row in plan_df.iterrows():
+                    target = int(row['Target'])
+                    if target <= 0:
+                        continue
+                    
+                    month_dt = row['Month']
+                    if isinstance(month_dt, pd.Timestamp):
+                        month_dt = month_dt.date()
+                    
+                    # Skip if month is before start date
+                    month_end = date(month_dt.year, month_dt.month, 
+                                    calendar.monthrange(month_dt.year, month_dt.month)[1])
+                    if month_end < start_date:
+                        continue
+                    
+                    # Get workdays for this month
+                    threshold = start_date if (month_dt.year == start_date.year and 
+                                              month_dt.month == start_date.month) else None
+                    workdays = get_workdays(month_dt.year, month_dt.month, threshold)
+                    
+                    if not workdays:
+                        continue
+                    
+                    # Get channel mix for this quarter
+                    quarter = (month_dt.month - 1) // 3 + 1
+                    direct_pct = channel_config.get((month_dt.year, quarter), 0.25)
+                    
+                    # Count existing non-PLANNED units for this month
+                    month_str = month_dt.strftime('%Y-%m')
+                    existing_result = conn.execute(text(
+                        "SELECT build_date FROM production_unit WHERE status != 'PLANNED'"
+                    ))
+                    existing_dates = [r[0] for r in existing_result.fetchall()]
+                    existing_count = sum(1 for d in existing_dates if str(d)[:7] == month_str)
+                    
+                    units_to_create = target - existing_count
+                    if units_to_create <= 0:
+                        continue
+                    
+                    # Distribute across workdays with channel mix
+                    day_idx = 0
+                    for i in range(units_to_create):
+                        build_date = workdays[day_idx % len(workdays)]
+                        channel = 'DIRECT' if random.random() < direct_pct else 'DEALER'
+                        
+                        conn.execute(text("""
+                            INSERT INTO production_unit 
+                            (serial_number, build_date, sales_channel, status)
+                            VALUES (:sn, :bd, :ch, 'PLANNED')
+                        """), {
+                            "sn": f"IDX-{sn_num:05d}",
+                            "bd": str(build_date),
+                            "ch": channel
+                        })
+                        
+                        sn_num += 1
+                        day_idx += 1
+                
+                conn.commit()
+            
+            st.success("Schedule regenerated!")
+            st.rerun()
         
         except Exception as e:
-            st.error(f"Could not load planning data: {e}")
+            st.error(f"Regeneration failed: {e}")
+            logger.error(traceback.format_exc())
 
 
 def view_opex(engine):
