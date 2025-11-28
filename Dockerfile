@@ -20,6 +20,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY seed_db.py .
 COPY dashboard.py .
 
+# Copy logo files
+COPY logo_white.png .
+COPY logo_blue.png .
+COPY icon_white.png .
+
 # Expose Streamlit port
 EXPOSE 8080
 

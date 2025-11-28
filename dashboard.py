@@ -404,23 +404,26 @@ def render_dashboard():
                 net_income = gross_profit - opex
                 units = conn.execute(text("SELECT COUNT(*) FROM production_unit")).scalar()
                 
-                # Metrics row
+                # Metrics row - compact format
                 m1, m2, m3, m4 = st.columns(4)
                 m1.metric("Total Units", f"{units:,}")
-                m2.metric("Total Revenue", money(revenue))
-                m3.metric("Gross Profit", money(gross_profit), f"{gross_profit/revenue*100:.1f}%" if revenue else "")
-                m4.metric("Net Income", money(net_income))
+                m2.metric("Revenue", f"${revenue/1e6:.1f}M")
+                m3.metric("Gross Profit", f"${gross_profit/1e6:.1f}M", f"{gross_profit/revenue*100:.0f}%" if revenue else "")
+                m4.metric("Net Income", f"${net_income/1e6:.1f}M")
                 
                 # Cash waterfall
                 waterfall = run_cash_waterfall(cash_df, equity, loc)
                 
                 st.markdown("---")
                 c1, c2, c3 = st.columns(3)
-                c1.metric("Min Cash", money(waterfall["Cash"].min()), 
-                         delta="⚠️ Negative" if waterfall["Cash"].min() < 0 else "✓ Positive",
-                         delta_color="inverse" if waterfall["Cash"].min() < 0 else "normal")
-                c2.metric("Peak LOC Used", money(waterfall["LOC_Used"].max()))
-                c3.metric("Final Cash", money(waterfall["Cash"].iloc[-1]))
+                min_cash = waterfall["Cash"].min()
+                max_loc = waterfall["LOC_Used"].max()
+                final_cash = waterfall["Cash"].iloc[-1]
+                c1.metric("Min Cash", f"${min_cash/1e6:.1f}M", 
+                         delta="⚠️ Negative" if min_cash < 0 else "✓ Positive",
+                         delta_color="inverse" if min_cash < 0 else "normal")
+                c2.metric("Peak LOC", f"${max_loc/1e6:.1f}M")
+                c3.metric("Final Cash", f"${final_cash/1e6:.1f}M")
                 
                 # Chart
                 st.subheader("💰 Cash & Credit Forecast")
@@ -461,19 +464,18 @@ def render_financials():
                 st.warning("No financial data available.")
                 return
             
-            # Summary metrics
+            # Summary metrics - compact format for better fit
             revenue = pnl_df[pnl_df["Type"] == "Revenue"]["Amount"].sum()
             cogs = pnl_df[pnl_df["Type"] == "COGS"]["Amount"].sum()
             opex = pnl_df[pnl_df["Type"] == "OpEx"]["Amount"].sum()
             gross_profit = revenue - cogs
             net_income = gross_profit - opex
             
-            c1, c2, c3, c4, c5 = st.columns(5)
-            c1.metric("Revenue", money(revenue))
-            c2.metric("COGS", money(cogs))
-            c3.metric("Gross Profit", money(gross_profit))
-            c4.metric("OpEx", money(opex))
-            c5.metric("Net Income", money(net_income))
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Revenue", f"${revenue/1e6:.1f}M")
+            c2.metric("Gross Profit", f"${gross_profit/1e6:.1f}M", f"{gross_profit/revenue*100:.0f}% margin" if revenue else "")
+            c3.metric("OpEx", f"${opex/1e6:.1f}M")
+            c4.metric("Net Income", f"${net_income/1e6:.1f}M", f"{net_income/revenue*100:.0f}% margin" if revenue else "")
             
             st.markdown("---")
             
@@ -497,11 +499,9 @@ def render_financials():
             # Reorder columns
             monthly = monthly[["Revenue", "COGS", "Gross Profit", "OpEx", "Net Income"]]
             
-            # Format for display
+            # Format for display (no background_gradient - requires matplotlib)
             st.dataframe(
-                monthly.style.format("${:,.0f}").background_gradient(
-                    subset=["Net Income"], cmap="RdYlGn", vmin=-500000, vmax=500000
-                ),
+                monthly.style.format("${:,.0f}"),
                 use_container_width=True,
                 height=400
             )
